@@ -1,0 +1,14 @@
+# Dependencies (reinstall with `npm install`)
+node_modules/
+
+# Machine-local Claude Code settings
+.claude/settings.local.json
+
+# Dev/debug artifacts
+scripts/shot.png
+
+# OS / editor junk
+Thumbs.db
+.DS_Store
+*.log
+npm-debug.log*
