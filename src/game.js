@@ -93,12 +93,15 @@ class GameScene extends Phaser.Scene {
     this.physics.add.collider(this.zombies, walls);
     this.physics.add.collider(this.cops, walls);
     this.physics.add.collider(this.zombies, this.zombies);
-    this.physics.add.collider(this.bullets, walls, (b) => this.killBullet(b));
+    // Phaser can swap callback arg order for group-vs-object collisions, so we
+    // never trust position — pick the object tagged as a bullet.
+    const pickBullet = (a, c) => (a && a.isBullet) ? a : c;
+    this.physics.add.collider(this.bullets, walls, (a, c) => this.killBullet(pickBullet(a, c)));
 
     this.physics.add.overlap(this.player, this.civs, (p, c) => this.infect(c, true));
     this.physics.add.overlap(this.zombies, this.civs, (z, c) => this.infect(c, false));
-    this.physics.add.overlap(this.bullets, this.zombies, (b, z) => this.bulletHitZombie(b, z));
-    this.physics.add.overlap(this.bullets, this.player, (p, b) => this.bulletHitPlayer(b));
+    this.physics.add.overlap(this.bullets, this.zombies, (a, c) => { const b = pickBullet(a, c); this.bulletHitZombie(b, b === a ? c : a); });
+    this.physics.add.overlap(this.bullets, this.player, (a, c) => this.bulletHitPlayer(pickBullet(a, c)));
     this.physics.add.overlap(this.zombies, this.cops, (z, c) => this.bite(z, c, 1));
     this.physics.add.overlap(this.player, this.cops, (p, c) => this.bite(p, c, 2));
 
@@ -239,6 +242,7 @@ class GameScene extends Phaser.Scene {
     const ang = Phaser.Math.Angle.Between(cop.x, cop.y, target.x, target.y) + (Math.random() - 0.5) * 0.14;
     const mx = cop.x + Math.cos(ang) * 13, my = cop.y + Math.sin(ang) * 13;
     b.enableBody(true, mx, my, true, true);
+    b.isBullet = true;
     b.setDepth(4).setTint(0xffd77a);
     b.body.setSize(10, 4);
     b.setRotation(ang);
@@ -250,7 +254,7 @@ class GameScene extends Phaser.Scene {
   }
 
   killBullet(b) {
-    if (b.active) b.disableBody(true, true);
+    if (b && b.isBullet && b.active && typeof b.disableBody === 'function') b.disableBody(true, true);
   }
 
   bulletHitZombie(b, z) {
