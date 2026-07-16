@@ -17,6 +17,32 @@ const config = {
   scene: [BootScene, MenuScene, GameScene, UIScene, EndScene],
 };
 
+// On-screen error banner — surfaces any crash even without the dev console open,
+// so a freeze becomes diagnosable from a screenshot.
+function showFatal(label, detail) {
+  let el = document.getElementById('fatalBanner');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'fatalBanner';
+    el.style.cssText = [
+      'position:fixed', 'left:0', 'right:0', 'top:0', 'z-index:100',
+      'background:#7a1010', 'color:#ffd7d7', 'padding:10px 14px',
+      'font-family:Consolas,"Courier New",monospace', 'font-size:13px',
+      'white-space:pre-wrap', 'word-break:break-word', 'box-shadow:0 2px 12px #000',
+    ].join(';');
+    document.body.appendChild(el);
+  }
+  el.textContent = '⚠ ' + label + '\n' + detail + '\n(screenshot this and send it over)';
+}
+window.addEventListener('error', (e) => {
+  const where = (e.filename || '').split('/').pop() + ':' + e.lineno + ':' + e.colno;
+  showFatal('Script error: ' + (e.message || 'unknown'), where);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const r = e.reason;
+  showFatal('Unhandled promise rejection', (r && (r.stack || r.message)) || String(r));
+});
+
 window.addEventListener('load', () => {
   // Headless/hidden contexts (dev preview panes) never fire requestAnimationFrame;
   // fall back to a timer-driven loop there so the game still runs.
@@ -71,12 +97,20 @@ window.addEventListener('load', () => {
 
   // Watchdog: if the page is visible but the loop has silently stalled
   // (some browsers freeze rAF without a visibility event), kick it awake.
+  // If it stays stalled despite that, surface a banner so it's not a mystery.
   let lastFrame = 0, stalls = 0;
   setInterval(() => {
-    if (document.hidden || overlay.style.display !== 'none') { lastFrame = game.loop.frame; return; }
+    if (document.hidden || overlay.style.display !== 'none') { lastFrame = game.loop.frame; stalls = 0; return; }
     if (game.loop.frame === lastFrame) {
-      if (++stalls >= 2) { game.loop.wake(); stalls = 0; }
-    } else { stalls = 0; }
+      stalls++;
+      if (stalls >= 2) game.loop.wake();
+      if (stalls >= 4) showFatal('Render loop stalled while the tab was focused',
+        'frame ' + game.loop.frame + ' — this is the freeze; please screenshot.');
+    } else {
+      stalls = 0;
+      const b = document.getElementById('fatalBanner');
+      if (b) b.style.display = 'none';
+    }
     lastFrame = game.loop.frame;
   }, 1000);
 });

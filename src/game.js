@@ -103,14 +103,18 @@ class GameScene extends Phaser.Scene {
     this.physics.add.overlap(this.player, this.cops, (p, c) => this.bite(p, c, 2));
 
     // --- camera ---
+    // Zoom is a pure render transform (it never affects the game loop). Press Z
+    // to cycle it live; 1.0 = fully zoomed out.
+    this.zoomSteps = [1.0, 1.15, 1.3, 1.5];
+    this.zoomIdx = 2; // default 1.3
     const cam = this.cameras.main;
     cam.setBounds(0, 0, cfg.worldW, cfg.worldH);
-    cam.setZoom(1.5);
+    cam.setZoom(this.zoomSteps[this.zoomIdx]);
     cam.startFollow(this.player, true, 0.09, 0.09);
     cam.fadeIn(500, 0, 0, 0);
 
     // --- input ---
-    this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,LEFT,DOWN,RIGHT,SPACE,R,M');
+    this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,LEFT,DOWN,RIGHT,SPACE,R,M,Z');
 
     // --- UI scene ---
     if (this.scene.isActive('ui')) this.scene.stop('ui');
@@ -398,6 +402,12 @@ class GameScene extends Phaser.Scene {
       this.scene.stop('ui');
       this.scene.restart({ level: this.levelIndex });
       return;
+    }
+    if (Phaser.Input.Keyboard.JustDown(this.keys.Z)) {
+      this.zoomIdx = (this.zoomIdx + 1) % this.zoomSteps.length;
+      const z = this.zoomSteps[this.zoomIdx];
+      this.cameras.main.setZoom(z);
+      this.uiQueue.push({ type: 'headline', text: `[ ZOOM ${z.toFixed(2)}x ]` });
     }
     if (this.over) return;
 
