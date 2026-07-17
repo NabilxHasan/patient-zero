@@ -32,7 +32,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x090d15);
 scene.fog = new THREE.Fog(0x090d15, 26, 62);
 
-const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.1, 300);
+const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.1, 600);
 
 const hemi = new THREE.HemisphereLight(0x9aabcc, 0x27303f, 1.45);
 scene.add(hemi);
@@ -270,6 +270,8 @@ function drainMessages() {
     else if (m.type === 'shake') shake = Math.max(shake, m.amt);
     else if (m.type === 'level') hud.setLevel(m.name, m.intro);
     else if (m.type === 'blast') { blastLight.position.set(m.x, 2.5, m.z); blastLight.intensity = 90; }
+    else if (m.type === 'cleared') saveProgress(m.index + 1);      // checkpoint per district
+    else if (m.type === 'district') { /* entered a new district */ }
     else if (m.type === 'end') { transitioning = true; setTimeout(() => showEnd(m), 1400); }
   }
 }
