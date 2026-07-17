@@ -108,6 +108,7 @@ addEventListener('mousedown', e => {
     camMode = (camMode + 1) % CAM_MODES.length;
     hud.setHeadline(`[ CAMERA — ${CAM_MODES[camMode].toUpperCase()} ]`);
   } else if (e.button === 0) {
+    if (!pointerLocked) { requestLock(); return; }   // first click captures
     game.strike();
   } else if (e.button === 1) {
     e.preventDefault();
@@ -120,13 +121,43 @@ addEventListener('wheel', e => {
   hud.cyclePower(e.deltaY > 0 ? 1 : -1);
 }, { passive: true });
 
-// ---- mouse look: orbits the camera around patient zero ----
-let camYaw = 0, targetYaw = 0, camPitch = 1, targetPitch = 1;
+// ---- mouse look ----
+// Pointer lock + relative movement, like GTA/FPS. The old build mapped the
+// absolute cursor position to a bounded yaw, which is why it felt inverted and
+// unfinished, and why the OS cursor sat on top of the game.
+let camYaw = 0, targetYaw = 0;
+let camPitch = 0, targetPitch = 0;          // radians; 0 = level, +up, -down
+const MOUSE_SENS = 0.0022;
+const PITCH_MIN = -0.55, PITCH_MAX = 1.15;
+let invertY = false;
+let pointerLocked = false;
+const crosshair = document.getElementById('crosshair');
+const lockHint = document.getElementById('lockHint');
+
+function requestLock() {
+  const el = renderer.domElement;
+  if (!el.requestPointerLock) return;
+  // Browsers reject this when it isn't user-gesture-initiated or the document
+  // isn't focused, and it returns a promise in newer versions — swallow it or
+  // the rejection surfaces as a fatal error banner. Click-to-capture covers it.
+  try {
+    const r = el.requestPointerLock();
+    if (r && typeof r.catch === 'function') r.catch(() => {});
+  } catch { /* not available here */ }
+}
+document.addEventListener('pointerlockchange', () => {
+  pointerLocked = document.pointerLockElement === renderer.domElement;
+  crosshair.classList.toggle('on', pointerLocked);
+  lockHint.classList.toggle('hidden2', pointerLocked || !game);
+  // Escape releases the lock natively — treat that as opening the pause menu.
+  if (!pointerLocked && game && !game.over && !transitioning && !paused) pause(true);
+});
 addEventListener('mousemove', e => {
-  const nx = (e.clientX / innerWidth - 0.5) * 2;    // -1 .. 1
-  const ny = (e.clientY / innerHeight - 0.5) * 2;
-  targetYaw = -nx * 1.0;
-  targetPitch = 1 - ny * 0.35;
+  if (!pointerLocked) return;
+  // right = turn right (yaw decreases), down = look down
+  targetYaw -= e.movementX * MOUSE_SENS;
+  targetPitch += (invertY ? e.movementY : -e.movementY) * MOUSE_SENS;
+  targetPitch = Math.max(PITCH_MIN, Math.min(PITCH_MAX, targetPitch));
 });
 
 const ZOOMS = [1.35, 1.1, 0.9];
@@ -140,6 +171,7 @@ let game = null;
 let shake = 0;
 let transitioning = false;
 const camPos = new THREE.Vector3();
+const _v3 = new THREE.Vector3();
 
 function startGame(level) {
   clearScene();
@@ -148,6 +180,8 @@ function startGame(level) {
   hud.show();
   updateCamera(0, true);   // snap behind the player on spawn
   transitioning = false;
+  lockHint.classList.remove('hidden2');
+  requestLock();
 }
 function clearScene() {
   for (let i = scene.children.length - 1; i >= 0; i--) {
@@ -169,39 +203,49 @@ function updateCamera(dt, snap) {
   if (!game) return;
   const p = game.player;
   const z = ZOOMS[zoomIdx];
-  camYaw = snap ? targetYaw : damp(camYaw, targetYaw, 6, dt);
-  camPitch = snap ? targetPitch : damp(camPitch, targetPitch, 6, dt);
+  camYaw = snap ? targetYaw : damp(camYaw, targetYaw, 18, dt);
+  camPitch = snap ? targetPitch : damp(camPitch, targetPitch, 18, dt);
   const mode = CAM_MODES[camMode];
   const py = p.y || 0;
   const shx = (Math.random() - 0.5) * shake, shz = (Math.random() - 0.5) * shake;
+  const scale = (game.playerScale || 1.15) / 1.15;
+
+  // camera-forward from yaw+pitch (yaw 0 looks down -Z)
+  const cp = Math.cos(camPitch), sp = Math.sin(camPitch);
+  const fwd = _v3.set(-Math.sin(camYaw) * cp, sp, -Math.cos(camYaw) * cp);
 
   if (mode === 'fpp') {
-    // eyes-in-the-skull: sit at head height and look along the aim vector
-    const eye = 1.6 * (game.playerScale || 1.15) / 1.15;
-    camera.position.set(p.x, py + eye + 0.2, p.z);
-    const look = new THREE.Vector3(
-      p.x - Math.sin(camYaw) * 10 + shx,
-      py + eye + 0.2 - (camPitch - 1) * 12,
-      p.z - Math.cos(camYaw) * 10 + shz
-    );
-    camera.lookAt(look);
+    const eye = 1.55 * scale;
+    camera.position.set(p.x, py + eye, p.z);
+    camera.lookAt(p.x + fwd.x * 10 + shx, py + eye + fwd.y * 10, p.z + fwd.z * 10 + shz);
     p.mesh.visible = false;                  // don't render the inside of our own head
   } else {
     p.mesh.visible = true;
     const tpp = mode === 'tpp';
-    const dist = (tpp ? 5.5 : 12) * z;
-    const height = (tpp ? 2.6 : 20 * camPitch) * z;
-    const tx = p.x + Math.sin(camYaw) * dist;
-    const tz = p.z + Math.cos(camYaw) * dist;
-    const ty = py + height;
+    // TPP sits behind the shoulder along -forward; top-down keeps the overhead
+    // framing but still orbits with yaw.
+    const dist = (tpp ? 6.0 * scale : 12) * z;
+    const aim = py + (tpp ? 1.5 * scale : 1.2);
+    let tx, ty, tz;
+    if (tpp) {
+      tx = p.x - fwd.x * dist;
+      ty = aim - fwd.y * dist + 1.4 * scale;
+      tz = p.z - fwd.z * dist;
+    } else {
+      const lift = 20 * z * (1 - camPitch * 0.35);
+      tx = p.x + Math.sin(camYaw) * dist;
+      ty = py + lift;
+      tz = p.z + Math.cos(camYaw) * dist;
+    }
+    ty = Math.max(ty, py + 1.0);             // never clip through the deck
     if (snap) camera.position.set(tx, ty, tz);
     else {
-      const rate = tpp ? 14 : 9;
+      const rate = tpp ? 16 : 9;
       camera.position.x = damp(camera.position.x, tx, rate, dt);
       camera.position.y = damp(camera.position.y, ty, rate, dt);
       camera.position.z = damp(camera.position.z, tz, rate, dt);
     }
-    camera.lookAt(p.x + shx, py + (tpp ? 1.5 : 1.2), p.z + shz);
+    camera.lookAt(p.x + shx, aim, p.z + shz);
   }
   playerLight.position.set(p.x, py + 3.7, p.z);
   moon.position.set(p.x - 20, 34, p.z + 14);
@@ -210,7 +254,7 @@ function updateCamera(dt, snap) {
 
 // Movement is camera-relative so the controls stay intuitive as the view orbits.
 function computeMove() {
-  const fx = -Math.sin(camYaw), fz = -Math.cos(camYaw);   // away from camera
+  const fx = -Math.sin(camYaw), fz = -Math.cos(camYaw);   // camera-forward on the XZ plane
   const rx = -fz, rz = fx;                                // screen-right
   const fwd = (keys.W ? 1 : 0) - (keys.S ? 1 : 0);
   const str = (keys.D ? 1 : 0) - (keys.A ? 1 : 0);
@@ -265,6 +309,7 @@ const pauseEl = document.getElementById('pause');
 // pause that resumes on any interaction.
 function pause(menu) {
   if (paused || !game || transitioning) return;
+  if (document.pointerLockElement) document.exitPointerLock();
   paused = true; pauseIsMenu = !!menu;
   keys.W = keys.A = keys.S = keys.D = false; input.lunge = false;
   pauseEl.innerHTML = menu ? `
@@ -299,6 +344,7 @@ function pause(menu) {
 function resume() {
   paused = false; pauseIsMenu = false;
   pauseEl.style.display = 'none';
+  if (game) requestLock();
   last = performance.now();
   if (window.AudioFX) AudioFX.resume();
 }

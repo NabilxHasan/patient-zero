@@ -117,6 +117,7 @@ export function buildCity(scene, cfg) {
   const props = [];
   const waters = [];
   const spots = [];   // rotating searchlights on watchtowers
+  const lamps = [];   // breakable streetlights (kept out of the static bake)
 
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(W + 60, H + 60),
@@ -160,7 +161,7 @@ export function buildCity(scene, cfg) {
   for (let r = 0; r <= rows; r++) {
     for (let c = 0; c <= cols; c++) {
       if (Math.random() < 0.5) continue;
-      streetlight(stat, group, STREET / 2 + c * CELL + 1.2, STREET / 2 + r * CELL + 1.2);
+      streetlight(group, lamps, STREET / 2 + c * CELL + 1.2, STREET / 2 + r * CELL + 1.2);
     }
   }
 
@@ -182,7 +183,7 @@ export function buildCity(scene, cfg) {
 
   function insideBlocked(x, z, pad = 0.5, y = 0) {
     for (const b of blockers) {
-      if (y > (b.top ?? 99)) continue;                 // cleared it
+      if (y >= (b.top ?? 99) - 0.05) continue;         // over it, or standing on it
       if (Math.abs(x - b.x) < b.hw + pad && Math.abs(z - b.z) < b.hh + pad) return true;
     }
     return false;
@@ -206,7 +207,7 @@ export function buildCity(scene, cfg) {
   // `y` is the actor's feet height — jump over anything shorter than that.
   function collide(x, z, rad, y = 0) {
     for (const b of blockers) {
-      if (y > (b.top ?? 99)) continue;
+      if (y >= (b.top ?? 99) - 0.05) continue;        // over it, or standing on it
       const dx = x - b.x, dz = z - b.z;
       const ox = b.hw + rad - Math.abs(dx);
       const oz = b.hh + rad - Math.abs(dz);
@@ -221,14 +222,25 @@ export function buildCity(scene, cfg) {
   }
   function blockedSegment(x, z) { return insideBlocked(x, z, 0); }
 
+  // Surface height under (x,z): a rooftop if you're over a building, else the
+  // street. Drives landing so the transformed player can walk the skyline.
+  function groundHeightAt(x, z) {
+    let h = 0;
+    for (const b of blockers) {
+      if (!b.walkable) continue;
+      if (Math.abs(x - b.x) < b.hw && Math.abs(z - b.z) < b.hh) h = Math.max(h, b.top);
+    }
+    return h;
+  }
+
   function tick(dt, t) {
     for (const w of waters) w.uniforms.uTime.value = t;
     for (const s of spots) { s.pivot.rotation.y += dt * s.speed; }
   }
 
   return {
-    group, W, H, blockers, trees, props, tick,
-    randomStreetPoint: randomStreetPointRaw, streetPointNear, collide, blockedSegment,
+    group, W, H, blockers, trees, props, lamps, tick,
+    randomStreetPoint: randomStreetPointRaw, streetPointNear, collide, blockedSegment, groundHeightAt,
   };
 }
 
@@ -286,12 +298,40 @@ function building(stat, cx, cz, blockers, cfg) {
   b.castShadow = true; b.receiveShadow = true;
   stat.add(b);
 
-  // roof detail
+  // ---- rooftop: walkable in Hulk form, so dress it ----
   const roof = box(w + 0.1, 0.2, d + 0.1, color, { cast: false }); roof.position.set(cx, h + 0.1, cz); stat.add(roof);
-  if (Math.random() < 0.75) {
-    const ac = box(0.9, 0.6, 0.9, 0x59606c, {});
-    ac.position.set(cx + (Math.random() - 0.5) * (w - 2), h + 0.5, cz + (Math.random() - 0.5) * (d - 2));
-    stat.add(ac);
+  // parapet lip around the edge
+  for (const [ox, oz, pw, pd] of [[0, -d / 2, w, 0.2], [0, d / 2, w, 0.2], [-w / 2, 0, 0.2, d], [w / 2, 0, 0.2, d]]) {
+    const lip = box(pw, 0.5, pd, 0x4a515c, {});
+    lip.position.set(cx + ox, h + 0.45, cz + oz); stat.add(lip);
+  }
+  const rx = () => cx + (Math.random() - 0.5) * (w - 2.5);
+  const rz = () => cz + (Math.random() - 0.5) * (d - 2.5);
+  if (Math.random() < 0.8) {                       // AC unit
+    const ac = box(1.0, 0.7, 1.0, 0x59606c, {}); ac.position.set(rx(), h + 0.55, rz()); stat.add(ac);
+  }
+  if (Math.random() < 0.6) {                       // chimney with a cap
+    const x0 = rx(), z0 = rz();
+    stat.add(box(0.6, 1.6, 0.6, 0x6b4a3a, {}).translateX(x0).translateY(h + 1.0).translateZ(z0));
+    stat.add(box(0.8, 0.16, 0.8, 0x3a3f47, {}).translateX(x0).translateY(h + 1.85).translateZ(z0));
+  }
+  if (Math.random() < 0.55) {                      // solar array
+    const x0 = rx(), z0 = rz();
+    for (let i = 0; i < 2; i++) {
+      const panel = box(1.5, 0.08, 0.9, 0x1c3350, { roughness: 0.25 });
+      panel.position.set(x0, h + 0.62, z0 + i * 1.1);
+      panel.rotation.x = -0.42;
+      stat.add(panel);
+      stat.add(box(0.08, 0.35, 0.08, 0x3a3f47, {}).translateX(x0).translateY(h + 0.35).translateZ(z0 + i * 1.1));
+    }
+  }
+  if (Math.random() < 0.5) {                       // crates + vent pipe
+    stat.add(box(0.7, 0.7, 0.7, 0x7a5a34, {}).translateX(rx()).translateY(h + 0.55).translateZ(rz()));
+    const x0 = rx(), z0 = rz();
+    stat.add(box(0.3, 0.9, 0.3, 0x4a515c, {}).translateX(x0).translateY(h + 0.65).translateZ(z0));
+  }
+  if (Math.random() < 0.35) {                      // roof access hatch
+    stat.add(box(1.0, 0.25, 1.0, 0x3a3028, {}).translateX(rx()).translateY(h + 0.32).translateZ(rz()));
   }
   if (Math.random() < 0.4) {
     const vent = box(0.5, 0.35, 0.5, 0x4a515c, { cast: false });
@@ -301,7 +341,7 @@ function building(stat, cx, cz, blockers, cfg) {
   // entrance canopy so the ground floor reads
   const door = box(1.4, 0.12, 0.5, 0x2a2f38, { cast: false });
   door.position.set(cx, 2.1, cz + d / 2 + 0.2); stat.add(door);
-  blockers.push({ x: cx, z: cz, hw: w / 2, hh: d / 2, top: h });
+  blockers.push({ x: cx, z: cz, hw: w / 2, hh: d / 2, top: h, walkable: true });
 }
 
 function park(stat, group, cx, cz, cfg, trees, waters, blockers) {
@@ -355,21 +395,26 @@ function car(stat, cx, cz, blockers) {
   stat.add(g);
   const L = 4.0, Wd = 1.9;
   const w = horiz ? L : Wd, d = horiz ? Wd : L;
-  blockers.push({ x, z, hw: w / 2, hh: d / 2, top: 1.4 });
+  blockers.push({ x, z, hw: w / 2, hh: d / 2, top: 1.4, walkable: true });
 }
 
 // Lamps are emissive geometry plus a glow quad on the ground — no real
 // PointLight. ~15 of them as dynamic lights was a large share of the frame cost.
 // The lamp housing is light grey and the bulb only mildly emissive: a bright
 // bulb on a near-black pole just reads as a gold rectangle floating in the air.
-function streetlight(stat, group, x, z) {
-  const base = box(0.34, 0.24, 0.34, 0x6b7480, {}); base.position.set(x, 0.12, z); stat.add(base);
-  const pole = box(0.16, 3.6, 0.16, 0x79828e, { cast: true }); pole.position.set(x, 1.8, z); stat.add(pole);
-  const arm = box(0.14, 0.14, 0.8, 0x79828e, {}); arm.position.set(x, 3.55, z + 0.35); stat.add(arm);
-  const head = box(0.44, 0.2, 0.4, 0x8e97a3, {}); head.position.set(x, 3.4, z + 0.66); stat.add(head);
+// Lamps stay unmerged so they can be smashed.
+function streetlight(group, lamps, x, z) {
+  const g = new THREE.Group();
+  g.add(box(0.34, 0.24, 0.34, 0x6b7480, {}).translateY(0.12));
+  const pole = box(0.16, 3.6, 0.16, 0x79828e, { cast: true }); pole.position.y = 1.8; g.add(pole);
+  const arm = box(0.14, 0.14, 0.8, 0x79828e, {}); arm.position.set(0, 3.55, 0.35); g.add(arm);
+  const head = box(0.44, 0.2, 0.4, 0x8e97a3, {}); head.position.set(0, 3.4, 0.66); g.add(head);
   const bulb = box(0.3, 0.06, 0.26, 0xfff0c4, { emissive: 0xffca7a, emissiveIntensity: 1.4, cast: false });
-  bulb.position.set(x, 3.28, z + 0.66); stat.add(bulb);
+  bulb.position.set(0, 3.28, 0.66); g.add(bulb);
+  g.position.set(x, 0, z);
+  group.add(g);
   const pool = groundGlow(0xffca7a, 8, 0.3); pool.position.set(x, 0.04, z + 0.66); group.add(pool);
+  lamps.push({ mesh: g, x, z, broken: false, pool, chunks: [pole, arm, head, bulb] });
 }
 
 // Quarantine perimeter: barrier walls, corner watchtowers with sweeping lights.

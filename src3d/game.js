@@ -210,6 +210,7 @@ export class Game {
       if (v.vtype !== 'heli' && Math.hypot(v.x - p.x, v.z - p.z) < reach + 1.4) { this.damageVehicle(v, 5); hit = true; }
     }
     for (const b of this.barrels) if (!b.dead && Math.hypot(b.x - p.x, b.z - p.z) < reach + 0.4) this.popBarrel(b);
+    if (hulk) this.smashAround(p.x + fx * 1.5, p.z + fz * 1.5, reach);
     if (hit) this.msgs.push({ type: 'shake', amt: hulk ? 0.35 : 0.15 });
   }
 
@@ -225,7 +226,7 @@ export class Game {
       const d = Math.hypot(pr.x - p.x, pr.z - p.z);
       if (d < radius) { const a = Math.atan2(pr.z - p.z, pr.x - p.x); const f = (1 - d / radius) * 18; pr.vx += Math.cos(a) * f; pr.vz += Math.sin(a) * f; pr.spin = 8; }
     }
-    for (const t of this.city.trees) if (!t.broken && Math.hypot(t.x - p.x, t.z - p.z) < radius) this.breakTree(t);
+    this.smashAround(p.x, p.z, radius);
     for (const v of this.vehicles.slice()) {
       if (v.vtype !== 'heli' && Math.hypot(v.x - p.x, v.z - p.z) < radius) this.damageVehicle(v, 6);
     }
@@ -326,7 +327,7 @@ export class Game {
       const d = Math.hypot(p.x - x, p.z - z);
       if (d < BLAST_R) { const a = Math.atan2(p.z - z, p.x - x); const f = (1 - d / BLAST_R) * 16; p.vx += Math.cos(a) * f; p.vz += Math.sin(a) * f; p.spin = 6; }
     }
-    for (const t of this.city.trees) if (!t.broken && Math.hypot(t.x - x, t.z - z) < BLAST_R) this.breakTree(t);
+    this.smashAround(x, z, BLAST_R);
     // chain reaction
     for (const b of this.barrels) {
       if (!b.dead && Math.hypot(b.x - x, b.z - z) < BLAST_R * 0.8) b.chainAt = this.time + 0.12 + Math.random() * 0.12;
@@ -338,6 +339,32 @@ export class Game {
     b.dead = true;
     this.scene.remove(b.mesh);
     this.explode(b.x, b.z);
+  }
+
+  // Smash a streetlight: the pole topples into debris and its light pool dies.
+  breakLamp(l) {
+    if (l.broken) return;
+    l.broken = true;
+    this.parts.burst(l.x, 3.2, l.z, 0xffca7a, 16);
+    this.parts.burst(l.x, 1.0, l.z, 0x9aa3ae, 8);
+    AudioFX.zdie();
+    if (l.pool) { this.scene.remove(l.pool); l.pool = null; }
+    for (const chunk of l.chunks) {
+      chunk.getWorldPosition(_tmp);
+      this.scene.attach(chunk);
+      this.debris.push({
+        mesh: chunk, x: _tmp.x, y: _tmp.y, z: _tmp.z,
+        vx: (Math.random() - 0.5) * 6, vy: 2 + Math.random() * 3, vz: (Math.random() - 0.5) * 6,
+        rx: Math.random() * 7, rz: Math.random() * 7, life: 2.4,
+      });
+    }
+    this.scene.remove(l.mesh);
+  }
+
+  // Anything smashable inside a radius — used by dashes, pounds and blasts.
+  smashAround(x, z, radius) {
+    for (const t of this.city.trees) if (!t.broken && Math.hypot(t.x - x, t.z - z) < radius) this.breakTree(t);
+    for (const l of this.city.lamps) if (!l.broken && Math.hypot(l.x - x, l.z - z) < radius) this.breakLamp(l);
   }
 
   breakTree(t) {
@@ -493,28 +520,36 @@ export class Game {
     }
     // dashing shatters trees and detonates barrels
     if (lunging) {
-      for (const t of this.city.trees) if (!t.broken && Math.hypot(t.x - p.x, t.z - p.z) < 1.5) this.breakTree(t);
+      this.smashAround(p.x, p.z, this.time < this.hulkUntil ? 2.6 : 1.5);
       for (const b of this.barrels) if (!b.dead && Math.hypot(b.x - p.x, b.z - p.z) < 1.5) this.popBarrel(b);
     }
-    // --- vertical: jump, gravity, landing ---
+    // --- vertical: jump, gravity, landing (rooftops included) ---
     const hulkNow = this.time < this.hulkUntil;
-    if (input.jump && !p.airborne) {
-      p.vy = hulkNow ? 15 : 12;
+    // Normal hops just clear a car (1.4); only the transformed form reaches roofs.
+    const ground = this.city.groundHeightAt(p.x, p.z);
+    const onGround = p.y <= ground + 0.02 && !p.airborne;
+    if (input.jump && onGround) {
+      p.vy = hulkNow ? 18 : 10;
       p.airborne = true;
       AudioFX.lunge();
-      this.parts.burst(p.x, 0.2, p.z, 0x9fffc4, 8);
+      this.parts.burst(p.x, p.y + 0.2, p.z, 0x9fffc4, 8);
     }
-    if (p.airborne || p.y > 0) {
+    if (p.airborne || p.y > ground) {
       p.vy -= 26 * dt;
       p.y += p.vy * dt;
-      if (p.y <= 0) {
-        p.y = 0; p.vy = 0;
+      if (p.y <= ground) {
+        const fell = p.vy < -4;
+        p.y = ground; p.vy = 0;
         if (p.airborne) {
           p.airborne = false;
-          this.parts.burst(p.x, 0.2, p.z, 0xbfd4ff, hulkNow ? 18 : 6);
-          if (hulkNow) { this.msgs.push({ type: 'shake', amt: 0.5 }); this.groundPound(); }
+          this.parts.burst(p.x, p.y + 0.2, p.z, 0xbfd4ff, hulkNow ? 18 : 6);
+          if (hulkNow && fell) { this.msgs.push({ type: 'shake', amt: 0.5 }); this.groundPound(); }
         }
       }
+    } else if (p.y > ground) {
+      p.airborne = true;                 // walked off a ledge
+    } else {
+      p.y = ground;                      // stepped onto a low surface
     }
     // Hulk slams gunships out of the sky mid-jump.
     if (hulkNow && p.y > 3) {
@@ -536,7 +571,7 @@ export class Game {
     this.playerScale += (wantScale - this.playerScale) * (1 - Math.exp(-7 * dt));
     p.mesh.scale.setScalar(this.playerScale);
 
-    this.aura.position.set(p.x, 0.05, p.z);
+    this.aura.position.set(p.x, (p.y || 0) + 0.05, p.z);
     const s = (1 + Math.sin(this.time * 4) * 0.08) * (hulkNow ? 1.7 : 1);
     this.aura.scale.setScalar(s);
   }
@@ -549,8 +584,9 @@ export class Game {
     e.mesh.position.x = e.x; e.mesh.position.z = e.z;
     if (moving) e.mesh.rotation.y = Math.atan2(e.vx, e.vz);
     animateWalk(e.mesh, Math.hypot(e.vx, e.vz), dt, moving && !e.airborne);
-    // animateWalk owns mesh.y for the walk bob, so jump height is applied after
-    if (e.y) e.mesh.position.y += e.y;
+    // animateWalk writes the bob; compose it with world height (never +=, which
+    // compounds against the bob's own decay)
+    e.mesh.position.y = (e.mesh.userData.bob || 0) + (e.y || 0);
     // shove street props out of the way
     for (const p of this.city.props) {
       const d = Math.hypot(p.x - e.x, p.z - e.z);

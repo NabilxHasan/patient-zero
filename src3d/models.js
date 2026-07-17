@@ -273,12 +273,13 @@ export function animateWalk(g, speed, dt, moving) {
       if (parts.armR) parts.armR.rotation.x = -1.4 - Math.sin(g.userData.stepPhase * 0.5) * 0.15;
     }
     // little bob
-    g.position.y = Math.abs(Math.sin(g.userData.stepPhase)) * 0.05;
+    g.userData.bob = Math.abs(Math.sin(g.userData.stepPhase)) * 0.05;
   } else {
     if (parts.legL) parts.legL.rotation.x *= 0.8;
     if (parts.legR) parts.legR.rotation.x *= 0.8;
-    g.position.y *= 0.8;
+    g.userData.bob = (g.userData.bob || 0) * 0.8;
   }
+  g.position.y = g.userData.bob || 0;
   if (parts.heart) {
     const pulse = 1 + Math.sin(performance.now() * 0.006) * 0.15;
     parts.heart.scale.setScalar(pulse);
