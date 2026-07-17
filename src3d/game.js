@@ -1,7 +1,7 @@
 // Core gameplay for the 3D build. Entities live on the XZ plane; each holds a
 // three.js group synced every frame.
 import * as THREE from 'three';
-import { buildCity } from './city.js';
+import { buildWorld } from './world.js';
 import {
   makeCharacter, animateWalk, box, groundGlow, CIV_PALETTES,
   makeBarrel, makeHealthKit, makePoliceCar, makeTank, makeHelicopter,
@@ -28,7 +28,10 @@ export class Game {
 
   start() {
     const cfg = this.cfg;
-    this.city = buildCity(this.scene, cfg);
+    // One continuous world. `city` stays the name the rest of the code uses.
+    this.world = buildWorld(this.scene, LEVELS);
+    this.city = this.world;
+    this.districtIdx = this.levelIndex;
     this.civs = []; this.zombies = []; this.cops = []; this.bullets = [];
     this.barrels = []; this.kits = []; this.vehicles = []; this.shells = [];
     this.debris = []; this.healers = []; this.beams = [];
@@ -43,11 +46,15 @@ export class Game {
     this.aliveCivs = cfg.civs;
     this.outbreak = 0;
     this.headlineIdx = 0;
-    this.schedule = cfg.responders.map(r => ({ ...r, done: false }));
-    this.vSchedule = (cfg.vehicles || []).map(v => ({ ...v, done: false }));
-    this.hSchedule = (cfg.healers || []).map(h => ({ ...h, done: false }));
+    // each district runs its own escalation
+    this.dSchedules = LEVELS.map(l => ({
+      resp: l.responders.map(r => ({ ...r, done: false })),
+      veh: (l.vehicles || []).map(v => ({ ...v, done: false })),
+      heal: (l.healers || []).map(h => ({ ...h, done: false })),
+    }));
 
-    const ps = this.city.streetPointNear(this.city.W / 2, this.city.H / 2, 2, 6);
+    const home = this.world.districts[this.levelIndex];
+    const ps = this.world.randomStreetPoint(this.levelIndex);
     this.player = this.makeEntity('player', ps.x, ps.z);
     this.player.hp = cfg.playerHp;
     this.player.maxHp = cfg.playerHp;
@@ -62,15 +69,25 @@ export class Game {
     this.aura.position.y = 0.05;
     this.scene.add(this.aura);
 
-    for (let i = 0; i < cfg.civs; i++) { const p = this.city.randomStreetPoint(); this.spawnCiv(p.x, p.z); }
-    for (let i = 0; i < (cfg.barrels || 0); i++) { const p = this.city.randomStreetPoint(); this.spawnBarrel(p.x, p.z); }
-    for (let i = 0; i < (cfg.healthKits || 0); i++) { const p = this.city.randomStreetPoint(); this.spawnKit(p.x, p.z); }
-    for (let i = 0; i < (cfg.animals || 0); i++) { const p = this.city.randomStreetPoint(); this.spawnAnimal(p.x, p.z); }
     const ptypes = Object.keys(POWERS);
-    for (let i = 0; i < (cfg.powers || 0); i++) {
-      const p = this.city.randomStreetPoint();
-      this.spawnPowerPickup(ptypes[i % ptypes.length], p.x, p.z);
+    for (const d of this.world.districts) {
+      const c = d.cfg, di = d.index;
+      this.districtCfg = c;
+      for (let i = 0; i < c.civs; i++) { const p = this.world.randomStreetPoint(di); this.spawnCiv(p.x, p.z, di); }
+      for (let i = 0; i < (c.animals || 0); i++) { const p = this.world.randomStreetPoint(di); this.spawnAnimal(p.x, p.z, di); }
+      for (let i = 0; i < (c.barrels || 0); i++) { const p = this.world.randomStreetPoint(di); this.spawnBarrel(p.x, p.z); }
+      for (let i = 0; i < (c.healthKits || 0); i++) { const p = this.world.randomStreetPoint(di); this.spawnKit(p.x, p.z); }
+      for (let i = 0; i < (c.powers || 0); i++) {
+        const p = this.world.randomStreetPoint(di);
+        this.spawnPowerPickup(ptypes[i % ptypes.length], p.x, p.z);
+      }
     }
+    this.districtCfg = cfg;
+    // per-district outbreak bookkeeping
+    this.dStats = this.world.districts.map(d => {
+      const n = this.civs.filter(c => c.district === d.index).length;
+      return { initial: n, alive: n, cleared: false };
+    });
 
     for (const grp of cfg.initial) {
       for (let i = 0; i < grp.count; i++) {
@@ -93,18 +110,20 @@ export class Game {
     return { mesh, x, z, vx: 0, vz: 0, kind, speed: 0, nextThink: Math.random() * 0.3, wander: null, stunUntil: 0 };
   }
 
-  spawnCiv(x, z) {
+  spawnCiv(x, z, di) {
+    const cfg = di != null ? this.world.districts[di].cfg : this.districtCfg;
     const e = this.makeEntity('civ', x, z, CIV_PALETTES[(Math.random() * CIV_PALETTES.length) | 0]);
     e.state = 'calm'; e.turning = false; e.stamina = 100; e.calmAt = 0;
+    e.district = di != null ? di : this.world.districtAt(x, z).index;
     // Hollowbrook farmers don't all run — some pick up a tool and swing back.
-    if (this.cfg.civsFightBack && Math.random() < 0.45) {
+    if (cfg.civsFightBack && Math.random() < 0.45) {
       e.armed = true; e.nextSwing = 0;
       const tool = makeFarmTool(Math.random() < 0.5 ? 'pitchfork' : 'scythe');
       tool.position.set(0.34, 1.05, 0);
       tool.rotation.x = -0.5;
       e.mesh.add(tool);
     }
-    if (this.cfg.civsBlink) { e.blink = true; e.nextBlink = 0; }   // Neo Halcyon hover-shoes
+    if (cfg.civsBlink) { e.blink = true; e.nextBlink = 0; }   // Neo Halcyon hover-shoes
     this.civs.push(e); return e;
   }
   spawnZombie(x, z) {
@@ -113,20 +132,22 @@ export class Game {
     this.zombies.push(e); this.parts.burst(x, 1, z, 0x53ff7a, 14); return e;
   }
   spawnCop(x, z, type) {
-    const e = this.makeEntity(type, x, z, null, this.cfg.oldSchool ? 'oldSchool' : null);
+    const d = this.world.districtAt(x, z);
+    const e = this.makeEntity(type, x, z, null, d.cfg.oldSchool ? 'oldSchool' : null);
+    e.district = d.index;
     const t = COP_TYPES[type];
     e.copType = type; e.hp = t.hp; e.nextShot = 0; e.lastBite = -999;
     this.cops.push(e); return e;
   }
   // Livestock: counts as a civilian for the outbreak, but slower and dumber.
-  spawnAnimal(x, z) {
+  spawnAnimal(x, z, di) {
     const mesh = makeAnimal(false);
     mesh.position.set(x, 0, z);
     this.scene.add(mesh);
     const e = { mesh, x, z, vx: 0, vz: 0, kind: 'civ', animal: true, state: 'calm', turning: false,
-      stamina: 100, calmAt: 0, nextThink: Math.random() * 0.3, wander: null, stunUntil: 0 };
+      stamina: 100, calmAt: 0, nextThink: Math.random() * 0.3, wander: null, stunUntil: 0,
+      district: di != null ? di : this.world.districtAt(x, z).index };
     this.civs.push(e);
-    this.aliveCivs++; this.initialCivs++;      // livestock counts toward the district
     return e;
   }
 
@@ -464,6 +485,8 @@ export class Game {
     this.city.tick(dt, this.time);
 
     this.updatePlayer(dt, input);
+    this.cullDistant();
+    this.updateDistrict();
 
     for (const c of this.civs) {
       if ((c.nextThink -= dt) <= 0) {
@@ -472,13 +495,13 @@ export class Game {
       }
       if (c.turning && this.time >= c.turnAt) this.finishTurn(c);
     }
-    for (const z of this.zombies) if ((z.nextThink -= dt) <= 0) { this.thinkZombie(z); z.nextThink = 0.14 + Math.random() * 0.1; }
-    for (const cop of this.cops) if ((cop.nextThink -= dt) <= 0) { this.thinkCop(cop); cop.nextThink = 0.1 + Math.random() * 0.07; }
+    for (const z of this.zombies) if (!z.asleep && (z.nextThink -= dt) <= 0) { this.thinkZombie(z); z.nextThink = 0.14 + Math.random() * 0.1; }
+    for (const cop of this.cops) if (!cop.asleep && (cop.nextThink -= dt) <= 0) { this.thinkCop(cop); cop.nextThink = 0.1 + Math.random() * 0.07; }
 
     this.moveEntity(this.player, dt);
-    for (const c of this.civs) if (!c.turning) this.moveEntity(c, dt);
-    for (const z of this.zombies) this.moveEntity(z, dt);
-    for (const cop of this.cops) this.moveEntity(cop, dt);
+    for (const c of this.civs) if (!c.turning && !c.asleep) this.moveEntity(c, dt);
+    for (const z of this.zombies) if (!z.asleep) this.moveEntity(z, dt);
+    for (const cop of this.cops) if (!cop.asleep) this.moveEntity(cop, dt);
 
     this.updateHealers(dt);
     this.updateGas(dt);
@@ -535,8 +558,7 @@ export class Game {
 
     // Win needs civilians cleared and every *ground* responder down. Helicopters
     // are excluded on purpose — they leave on a timer and must never softlock it.
-    const tanksLeft = this.vehicles.filter(v => v.vtype === 'tank').length;
-    if (this.aliveCivs <= 0 && this.cops.length === 0 && tanksLeft === 0 && this.healers.length === 0) this.endLevel(true);
+    if (this.dStats.every(d => d.cleared)) this.endLevel(true);
   }
 
   updatePlayer(dt, input) {
@@ -823,6 +845,7 @@ export class Game {
   // pushes the outbreak percentage *down*. Ignoring him stalls the district.
   updateHealers(dt) {
     for (const h of this.healers) {
+      if (h.asleep) continue;
       if (this.time < h.stunUntil) { h.vx = h.vz = 0; this.moveEntity(h, dt); continue; }
       const pd = this.dist(this.player, h);
 
@@ -931,6 +954,7 @@ export class Game {
   updateVehicles(dt) {
     for (let i = this.vehicles.length - 1; i >= 0; i--) {
       const v = this.vehicles[i];
+      if (v.asleep) continue;
       const spec = VEHICLES[v.vtype];
       const p = this.player;
       const d = this.dist(p, v);
@@ -1078,12 +1102,66 @@ export class Game {
     if (this.player.hp <= 0) this.endLevel(false);
   }
 
+  // The world holds three districts' worth of actors. Only those near patient
+  // zero think or render — otherwise 3x the map costs 3x the frame on the
+  // integrated GPU we tuned for.
+  ACTIVE_RANGE = 78;
+  cullDistant() {
+    const p = this.player;
+    const R2 = this.ACTIVE_RANGE * this.ACTIVE_RANGE;
+    const near = (e) => {
+      const dx = e.x - p.x, dz = e.z - p.z;
+      return dx * dx + dz * dz < R2;
+    };
+    for (const list of [this.civs, this.zombies, this.cops, this.healers]) {
+      for (const e of list) {
+        const on = near(e);
+        e.asleep = !on;
+        if (e.mesh.visible !== on) e.mesh.visible = on;
+      }
+    }
+    for (const v of this.vehicles) { const on = near(v); v.asleep = !on; v.mesh.visible = on; }
+  }
+
+  // Which district am I standing in, and has it fallen?
+  updateDistrict() {
+    const d = this.world.districtAt(this.player.x, this.player.z);
+    if (d.index !== this.districtIdx) {
+      this.districtIdx = d.index;
+      this.districtCfg = d.cfg;
+      this.msgs.push({ type: 'level', name: d.cfg.name, intro: d.cfg.intro });
+      this.msgs.push({ type: 'district', index: d.index });
+    }
+    // recount this district's survivors
+    for (let i = 0; i < this.dStats.length; i++) {
+      const st = this.dStats[i];
+      st.alive = this.civs.filter(c => c.district === i && !c.turning).length;
+      if (!st.cleared && st.alive <= 0 && st.initial > 0) {
+        const copsHere = this.cops.filter(c => c.district === i).length;
+        const tanksHere = this.vehicles.filter(v => v.vtype === 'tank' && this.world.districtAt(v.x, v.z).index === i).length;
+        const medicsHere = this.healers.filter(h => this.world.districtAt(h.x, h.z).index === i).length;
+        if (copsHere === 0 && tanksHere === 0 && medicsHere === 0) {
+          st.cleared = true;
+          this.world.districts[i].cleared = true;
+          const gate = this.world.gates.find(g => g.unlocksDistrict === i + 1);
+          if (gate) { this.world.openGate(gate); this.msgs.push({ type: 'stinger', text: 'GATE OPEN — MOVE ON' }); }
+          else this.msgs.push({ type: 'stinger', text: 'DISTRICT FALLEN' });
+          AudioFX.win();
+          this.msgs.push({ type: 'cleared', index: i });
+        }
+      }
+    }
+  }
+
   updateWaves() {
-    this.outbreak = 1 - this.aliveCivs / this.initialCivs;
+    const st = this.dStats[this.districtIdx];
+    this.aliveCivs = st.alive; this.initialCivs = st.initial;
+    this.outbreak = st.initial ? 1 - st.alive / st.initial : 0;
     while (this.headlineIdx < HEADLINES.length && this.outbreak >= HEADLINES[this.headlineIdx].pct) {
       this.msgs.push({ type: 'headline', text: HEADLINES[this.headlineIdx].text }); this.headlineIdx++;
     }
-    for (const s of this.schedule) {
+    const sched = this.dSchedules[this.districtIdx];
+    for (const s of sched.resp) {
       if (!s.done && this.outbreak >= s.pct) {
         s.done = true;
         for (let i = 0; i < s.count; i++) { const p = this.city.streetPointNear(this.player.x, this.player.z, 16, 28); this.spawnCop(p.x, p.z, s.type); }
@@ -1091,7 +1169,7 @@ export class Game {
         AudioFX.siren();
       }
     }
-    for (const s of this.vSchedule) {
+    for (const s of sched.veh) {
       if (!s.done && this.outbreak >= s.pct) {
         s.done = true;
         for (let i = 0; i < s.count; i++) {
@@ -1102,7 +1180,7 @@ export class Game {
         AudioFX.siren();
       }
     }
-    for (const s of this.hSchedule) {
+    for (const s of sched.heal) {
       if (!s.done && this.outbreak >= s.pct) {
         s.done = true;
         for (let i = 0; i < s.count; i++) {

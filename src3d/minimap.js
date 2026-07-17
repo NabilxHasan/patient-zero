@@ -29,7 +29,7 @@ export class Minimap {
     const p = gs.player;
 
     // world->map: full view fits the district, corner view follows the player
-    const span = this.full ? Math.max(W, H) : 46;
+    const span = this.full ? Math.max(W, H) * 1.02 : 46;
     const cx = this.full ? W / 2 : p.x;
     const cz = this.full ? H / 2 : p.z;
     const k = S / span;
@@ -40,9 +40,21 @@ export class Minimap {
     c.fillStyle = 'rgba(8,11,16,0.86)';
     c.fillRect(0, 0, S, S);
 
-    // district bounds
-    c.strokeStyle = '#3a424f'; c.lineWidth = 2;
-    c.strokeRect(tx(0), tz(0), W * k, H * k);
+    // district bounds — cleared ones read green, the current one highlighted
+    c.lineWidth = 2;
+    if (gs.world) {
+      for (const d of gs.world.districts) {
+        c.strokeStyle = d.cleared ? '#2f7a4c' : (d.index === gs.districtIdx ? '#49ff8c' : '#3a424f');
+        c.strokeRect(tx(d.bounds.x0), tz(d.bounds.z0), (d.bounds.x1 - d.bounds.x0) * k, (d.bounds.z1 - d.bounds.z0) * k);
+      }
+      for (const g of gs.world.gates) {                 // gate markers
+        c.fillStyle = g.open ? '#49ff8c' : '#ffc23a';
+        c.fillRect(tx(g.x) - 2, tz(g.z) - 6, 4, 12);
+      }
+    } else {
+      c.strokeStyle = '#3a424f';
+      c.strokeRect(tx(0), tz(0), W * k, H * k);
+    }
 
     // buildings (cached per district — they never move)
     if (this.cacheFor !== gs.city) { this.cacheFor = gs.city; this.blockerCache = gs.city.blockers; }
