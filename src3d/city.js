@@ -2,8 +2,56 @@
 // windows, parks with real animated water and breakable trees, pushable street
 // props, parked cars, streetlights, and a quarantine border with watchtowers.
 import * as THREE from 'three';
-import { box, mat, makeTree, makeProp, makeBorderWall, groundGlow } from './models.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { box, mat, makeTree, makeProp, makeBorderWall, groundGlow, makeCivCar } from './models.js';
 import { BLOCK, STREET, CELL } from './levels.js';
+
+// The city never moves, so its meshes are baked into one merged mesh per
+// material. A district was ~420 draw calls, and on integrated GPUs draw-call
+// overhead alone cost ~13ms/frame regardless of resolution.
+// Excluded: anything animated, transparent, or gameplay-owned (water, glow
+// quads, breakable trees, pushable props, barrels, kits).
+function mergeStatic(root) {
+  const buckets = new Map();
+  const out = new THREE.Group();
+  root.updateMatrixWorld(true);
+
+  const meshes = [];
+  root.traverse(o => { if (o.isMesh) meshes.push(o); });
+
+  for (const o of meshes) {
+    const m = o.material;
+    const ok = m && !m.transparent && !Array.isArray(m) && !o.userData.noMerge
+      && o.geometry.isBufferGeometry && o.geometry.index;   // keep indexed-only so merges are uniform
+    if (!ok) { out.attach(o); continue; }                   // preserve anything we can't bake
+    const key = m.uuid + '|' + (o.castShadow ? 1 : 0) + '|' + (o.receiveShadow ? 1 : 0);
+    if (!buckets.has(key)) buckets.set(key, { material: m, cast: o.castShadow, receive: o.receiveShadow, geos: [], src: [] });
+    const gg = o.geometry.clone();
+    gg.applyMatrix4(o.matrixWorld);
+    for (const name of Object.keys(gg.attributes)) {
+      if (!['position', 'normal', 'uv'].includes(name)) gg.deleteAttribute(name);
+    }
+    const b = buckets.get(key);
+    b.geos.push(gg); b.src.push(o);
+  }
+
+  let count = 0;
+  for (const b of buckets.values()) {
+    if (!b.geos.length) continue;
+    let geo = null;
+    try { geo = b.geos.length === 1 ? b.geos[0] : mergeGeometries(b.geos, false); }
+    catch { geo = null; }
+    if (geo) {
+      const mesh = new THREE.Mesh(geo, b.material);
+      mesh.castShadow = b.cast; mesh.receiveShadow = b.receive;
+      out.add(mesh); count++;
+    } else {
+      // merge failed — keep the originals rather than dropping the geometry
+      for (const o of b.src) out.attach(o);
+    }
+  }
+  return { merged: out, count };
+}
 
 const CAR_COLORS = [0x8a4a42, 0x46687a, 0x6b6f75, 0x7a6a4a, 0x4a5a7a];
 
@@ -59,6 +107,9 @@ export function buildCity(scene, cfg) {
   const H = STREET + rows * CELL;
   const group = new THREE.Group();
   scene.add(group);
+  // Everything added to `stat` is baked down into a few merged meshes at the
+  // end; `group` holds anything animated, transparent or gameplay-owned.
+  const stat = new THREE.Group();
 
   const pal = cfg.palette;
   const blockers = [];
@@ -74,19 +125,19 @@ export function buildCity(scene, cfg) {
   ground.rotation.x = -Math.PI / 2;
   ground.position.set(W / 2, -0.02, H / 2);
   ground.receiveShadow = true;
-  group.add(ground);
+  stat.add(ground);
 
   // lane markings
   const laneMat = new THREE.MeshStandardMaterial({ color: 0x2c333f, roughness: 1 });
   for (let r = 0; r <= rows; r++) {
     const z = STREET / 2 + r * CELL;
     const l = new THREE.Mesh(new THREE.PlaneGeometry(W, 0.35), laneMat);
-    l.rotation.x = -Math.PI / 2; l.position.set(W / 2, 0.01, z); group.add(l);
+    l.rotation.x = -Math.PI / 2; l.position.set(W / 2, 0.01, z); stat.add(l);
   }
   for (let c = 0; c <= cols; c++) {
     const x = STREET / 2 + c * CELL;
     const l = new THREE.Mesh(new THREE.PlaneGeometry(0.35, H), laneMat);
-    l.rotation.x = -Math.PI / 2; l.position.set(x, 0.01, H / 2); group.add(l);
+    l.rotation.x = -Math.PI / 2; l.position.set(x, 0.01, H / 2); stat.add(l);
   }
 
   const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0x232933, roughness: 1 });
@@ -97,24 +148,23 @@ export function buildCity(scene, cfg) {
       const bz = STREET + cy * CELL + BLOCK / 2;
 
       const sw = new THREE.Mesh(new THREE.PlaneGeometry(BLOCK + 2.6, BLOCK + 2.6), sidewalkMat);
-      sw.rotation.x = -Math.PI / 2; sw.position.set(bx, 0.005, bz); sw.receiveShadow = true; group.add(sw);
+      sw.rotation.x = -Math.PI / 2; sw.position.set(bx, 0.005, bz); sw.receiveShadow = true; stat.add(sw);
 
-      if (Math.random() < cfg.parkChance) park(group, bx, bz, cfg, trees, waters);
-      else building(group, bx, bz, blockers, cfg);
+      if (Math.random() < cfg.parkChance) park(stat, group, bx, bz, cfg, trees, waters);
+      else building(stat, bx, bz, blockers, cfg);
 
-      if (Math.random() < 0.55) car(group, bx, bz, blockers);
+      if (Math.random() < 0.5) car(stat, bx, bz, blockers);
     }
   }
 
-  // streetlights
   for (let r = 0; r <= rows; r++) {
     for (let c = 0; c <= cols; c++) {
       if (Math.random() < 0.5) continue;
-      streetlight(group, STREET / 2 + c * CELL + 1.2, STREET / 2 + r * CELL + 1.2);
+      streetlight(stat, group, STREET / 2 + c * CELL + 1.2, STREET / 2 + r * CELL + 1.2);
     }
   }
 
-  // pushable street props
+  // pushable street props (dynamic — never merged)
   for (let i = 0; i < (cfg.props || 0); i++) {
     const p = randomStreetPointRaw();
     const g = makeProp(Math.random() < 0.5 ? 'bin' : 'crate');
@@ -124,7 +174,11 @@ export function buildCity(scene, cfg) {
   }
 
   // ---- quarantine border + watchtowers ----
-  border(group, W, H, spots);
+  border(stat, group, W, H, spots);
+
+  // bake the static city down
+  const { merged } = mergeStatic(stat);
+  group.add(merged);
 
   function insideBlocked(x, z, pad = 0.5) {
     for (const b of blockers) {
@@ -175,43 +229,81 @@ export function buildCity(scene, cfg) {
   };
 }
 
-function building(group, cx, cz, blockers, cfg) {
+// Facades are baked into a canvas instead of built from hundreds of window
+// planes — a 5x5 district was spending ~1000 draw calls on windows alone.
+// Albedo carries the wall + windows; a matching emissive map lights only the
+// lit ones.
+function facadeMaterial(w, h, wallColor) {
+  const cols = Math.max(2, Math.round(w / 1.35));
+  const rows = Math.max(2, Math.round(h / 1.45));
+  const CW = 16, CH = 16;                       // px per window cell
+  const cw = cols * CW, ch = rows * CH;
+
+  const base = document.createElement('canvas'); base.width = cw; base.height = ch;
+  const glow = document.createElement('canvas'); glow.width = cw; glow.height = ch;
+  const b = base.getContext('2d'), gl = glow.getContext('2d');
+
+  const hex = '#' + wallColor.toString(16).padStart(6, '0');
+  b.fillStyle = hex; b.fillRect(0, 0, cw, ch);
+  gl.fillStyle = '#000'; gl.fillRect(0, 0, cw, ch);
+
+  // subtle concrete banding
+  b.fillStyle = 'rgba(255,255,255,0.04)';
+  for (let r = 0; r < rows; r++) b.fillRect(0, r * CH, cw, 1);
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = c * CW + 4, y = r * CH + 3, ww = CW - 8, wh = CH - 7;
+      const lit = Math.random() < 0.3;
+      b.fillStyle = lit ? '#e8cf8a' : '#11141b';
+      b.fillRect(x, y, ww, wh);
+      b.fillStyle = 'rgba(0,0,0,0.35)';          // frame
+      b.fillRect(x, y, ww, 1); b.fillRect(x, y + wh - 1, ww, 1);
+      if (lit) { gl.fillStyle = '#e8cf8a'; gl.fillRect(x, y, ww, wh); }
+    }
+  }
+  const map = new THREE.CanvasTexture(base);
+  const emissiveMap = new THREE.CanvasTexture(glow);
+  map.magFilter = emissiveMap.magFilter = THREE.NearestFilter;
+  return new THREE.MeshStandardMaterial({
+    map, emissiveMap, emissive: 0xffffff, emissiveIntensity: 1.25, roughness: 0.92,
+  });
+}
+
+function building(stat, cx, cz, blockers, cfg) {
   const w = BLOCK - (1 + Math.random() * 2);
   const d = BLOCK - (1 + Math.random() * 2);
   const [hMin, hMax] = cfg.buildingH;
   const h = hMin + Math.random() * (hMax - hMin);
   const roofs = cfg.palette.roofs;
   const color = roofs[(Math.random() * roofs.length) | 0];
-  const b = box(w, h, d, color, { receive: true });
-  b.position.set(cx, h / 2, cz);
-  group.add(b);
 
-  const winMat = new THREE.MeshStandardMaterial({ color: 0xe3c987, emissive: 0xe3c987, emissiveIntensity: 1.6, roughness: 0.6 });
-  const darkWin = new THREE.MeshStandardMaterial({ color: 0x12151c, roughness: 0.8 });
-  const rowsY = Math.max(1, Math.floor(h / 1.4));
-  const perRow = Math.max(1, Math.floor(w / 1.3));
-  for (let fy = 0; fy < rowsY; fy++) {
-    const yy = 0.9 + fy * 1.4;
-    if (yy > h - 0.4) break;
-    for (let fx = 0; fx < perRow; fx++) {
-      const lit = Math.random() < 0.28;
-      const q = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.7), lit ? winMat : darkWin);
-      const xx = -w / 2 + 0.9 + fx * 1.3;
-      const q1 = q.clone(); q1.position.set(cx + xx, yy, cz + d / 2 + 0.02); group.add(q1);
-      if (Math.random() < 0.6) { const q2 = q.clone(); q2.rotation.y = Math.PI; q2.position.set(cx - xx, yy, cz - d / 2 - 0.02); group.add(q2); }
-    }
-  }
-  if (Math.random() < 0.7) {
+  const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), facadeMaterial(w, h, color));
+  b.position.set(cx, h / 2, cz);
+  b.castShadow = true; b.receiveShadow = true;
+  stat.add(b);
+
+  // roof detail
+  const roof = box(w + 0.1, 0.2, d + 0.1, color, { cast: false }); roof.position.set(cx, h + 0.1, cz); stat.add(roof);
+  if (Math.random() < 0.75) {
     const ac = box(0.9, 0.6, 0.9, 0x59606c, {});
-    ac.position.set(cx + (Math.random() - 0.5) * (w - 2), h + 0.3, cz + (Math.random() - 0.5) * (d - 2));
-    group.add(ac);
+    ac.position.set(cx + (Math.random() - 0.5) * (w - 2), h + 0.5, cz + (Math.random() - 0.5) * (d - 2));
+    stat.add(ac);
   }
+  if (Math.random() < 0.4) {
+    const vent = box(0.5, 0.35, 0.5, 0x4a515c, { cast: false });
+    vent.position.set(cx + (Math.random() - 0.5) * (w - 2), h + 0.38, cz + (Math.random() - 0.5) * (d - 2));
+    stat.add(vent);
+  }
+  // entrance canopy so the ground floor reads
+  const door = box(1.4, 0.12, 0.5, 0x2a2f38, { cast: false });
+  door.position.set(cx, 2.1, cz + d / 2 + 0.2); stat.add(door);
   blockers.push({ x: cx, z: cz, hw: w / 2, hh: d / 2 });
 }
 
-function park(group, cx, cz, cfg, trees, waters) {
+function park(stat, group, cx, cz, cfg, trees, waters) {
   const grass = new THREE.Mesh(new THREE.PlaneGeometry(BLOCK, BLOCK), mat(0x1d3322, 0x000000, 1, 1));
-  grass.rotation.x = -Math.PI / 2; grass.position.set(cx, 0.02, cz); grass.receiveShadow = true; group.add(grass);
+  grass.rotation.x = -Math.PI / 2; grass.position.set(cx, 0.02, cz); grass.receiveShadow = true; stat.add(grass);
 
   if (Math.random() < 0.7) {
     const r = 2.0 + Math.random() * 0.8;
@@ -221,7 +313,7 @@ function park(group, cx, cz, cfg, trees, waters) {
     waters.push(w.material);
     // damp rim
     const rim = new THREE.Mesh(new THREE.RingGeometry(r, r + 0.35, 32), mat(0x24302a, 0x000000, 1, 1));
-    rim.rotation.x = -Math.PI / 2; rim.position.set(w.position.x, 0.04, w.position.z); group.add(rim);
+    rim.rotation.x = -Math.PI / 2; rim.position.set(w.position.x, 0.04, w.position.z); stat.add(rim);
   }
 
   if (cfg.trees !== false) {
@@ -235,30 +327,38 @@ function park(group, cx, cz, cfg, trees, waters) {
   }
 }
 
-function car(group, cx, cz, blockers) {
+function car(stat, cx, cz, blockers) {
   const horiz = Math.random() < 0.5;
   const along = (Math.random() - 0.5) * (BLOCK - 3);
   const side = (Math.random() < 0.5 ? 1 : -1) * (BLOCK / 2 + 1.6);
   const x = cx + (horiz ? along : side);
   const z = cz + (horiz ? side : along);
-  const L = 3.4, Wd = 1.7;
-  const w = horiz ? L : Wd, d = horiz ? Wd : L;
   const color = CAR_COLORS[(Math.random() * CAR_COLORS.length) | 0];
-  const body = box(w, 0.7, d, color, {}); body.position.set(x, 0.45, z); group.add(body);
-  const cab = box(horiz ? 1.6 : 1.1, 0.5, horiz ? 1.1 : 1.6, color, {}); cab.position.set(x, 1.0, z); group.add(cab);
+  const g = makeCivCar(color);
+  g.position.set(x, 0, z);
+  g.rotation.y = horiz ? Math.PI / 2 : 0;   // park along the kerb
+  stat.add(g);
+  const L = 4.0, Wd = 1.9;
+  const w = horiz ? L : Wd, d = horiz ? Wd : L;
   blockers.push({ x, z, hw: w / 2, hh: d / 2 });
 }
 
-function streetlight(group, x, z) {
-  const pole = box(0.16, 3.2, 0.16, 0x2b2f36, {}); pole.position.set(x, 1.6, z); group.add(pole);
-  const head = box(0.7, 0.18, 0.4, 0x3a3f47, {}); head.position.set(x, 3.2, z + 0.2); group.add(head);
-  const bulb = box(0.4, 0.1, 0.28, 0xffe1a1, { emissive: 0xffca7a, emissiveIntensity: 3, cast: false }); bulb.position.set(x, 3.08, z + 0.2); group.add(bulb);
-  const pl = new THREE.PointLight(0xffca7a, 7, 9, 2); pl.position.set(x, 3, z + 0.2); group.add(pl);
-  const pool = groundGlow(0xffca7a, 7, 0.18); pool.position.set(x, 0.04, z + 0.2); group.add(pool);
+// Lamps are emissive geometry plus a glow quad on the ground — no real
+// PointLight. ~15 of them as dynamic lights was a large share of the frame cost.
+// The lamp housing is light grey and the bulb only mildly emissive: a bright
+// bulb on a near-black pole just reads as a gold rectangle floating in the air.
+function streetlight(stat, group, x, z) {
+  const base = box(0.34, 0.24, 0.34, 0x6b7480, {}); base.position.set(x, 0.12, z); stat.add(base);
+  const pole = box(0.16, 3.6, 0.16, 0x79828e, { cast: true }); pole.position.set(x, 1.8, z); stat.add(pole);
+  const arm = box(0.14, 0.14, 0.8, 0x79828e, {}); arm.position.set(x, 3.55, z + 0.35); stat.add(arm);
+  const head = box(0.44, 0.2, 0.4, 0x8e97a3, {}); head.position.set(x, 3.4, z + 0.66); stat.add(head);
+  const bulb = box(0.3, 0.06, 0.26, 0xfff0c4, { emissive: 0xffca7a, emissiveIntensity: 1.4, cast: false });
+  bulb.position.set(x, 3.28, z + 0.66); stat.add(bulb);
+  const pool = groundGlow(0xffca7a, 8, 0.3); pool.position.set(x, 0.04, z + 0.66); group.add(pool);
 }
 
 // Quarantine perimeter: barrier walls, corner watchtowers with sweeping lights.
-function border(group, W, H, spots) {
+function border(stat, group, W, H, spots) {
   const t = 0.6;
   const segs = [
     { len: W + 2, horiz: true, x: W / 2, z: -t, inward: true },
@@ -269,17 +369,21 @@ function border(group, W, H, spots) {
   for (const s of segs) {
     const wall = makeBorderWall(s.len, s.horiz, s.inward);
     wall.position.set(s.x, 0, s.z);
-    group.add(wall);
+    stat.add(wall);
   }
   for (const [cx, cz] of [[0, 0], [W, 0], [0, H], [W, H]]) {
-    const legs = box(1.3, 5.2, 1.3, 0x2e343d, {}); legs.position.set(cx, 2.6, cz); group.add(legs);
-    const cab = box(2.2, 1.2, 2.2, 0x39414c, {}); cab.position.set(cx, 5.6, cz); group.add(cab);
-    const pivot = new THREE.Group(); pivot.position.set(cx, 5.4, cz); group.add(pivot);
-    const beam = box(0.45, 0.3, 0.45, 0xfff3c8, { emissive: 0xffe9a8, emissiveIntensity: 4, cast: false });
-    beam.position.set(0, 0, 1.2); pivot.add(beam);
-    const sl = new THREE.SpotLight(0xffe9a8, 60, 34, 0.30, 0.55, 1.6);
-    sl.position.set(0, 0, 1.2); sl.target.position.set(0, -5.4, 14);
-    pivot.add(sl); pivot.add(sl.target);
+    for (const [ox, oz] of [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]]) {
+      const leg = box(0.22, 5.4, 0.22, 0x4a525d, {}); leg.position.set(cx + ox, 2.7, cz + oz); stat.add(leg);
+    }
+    const deck = box(2.6, 0.2, 2.6, 0x5a626d, {}); deck.position.set(cx, 5.4, cz); stat.add(deck);
+    const cab = box(2.0, 1.4, 2.0, 0x6b7480, {}); cab.position.set(cx, 6.2, cz); stat.add(cab);
+    const roof = box(2.4, 0.16, 2.4, 0x8a939e, { cast: false }); roof.position.set(cx, 7.0, cz); stat.add(roof);
+    // Sweeping lamp: emissive head + a moving ground pool. A real SpotLight per
+    // tower is four more dynamic lights for a beam nobody looks straight at.
+    const pivot = new THREE.Group(); pivot.position.set(cx, 6.2, cz); group.add(pivot);
+    const beam = box(0.5, 0.34, 0.5, 0xfff3c8, { emissive: 0xffe9a8, emissiveIntensity: 4.5, cast: false });
+    beam.position.set(0, 0, 1.1); pivot.add(beam);
+    const pool = groundGlow(0xffe9a8, 13, 0.3); pool.position.set(0, -6.15, 7); pivot.add(pool);
     spots.push({ pivot, speed: 0.25 + Math.random() * 0.2 });
   }
 }

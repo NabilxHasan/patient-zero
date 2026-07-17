@@ -17,7 +17,9 @@ addEventListener('unhandledrejection', e => showFatal('Promise rejection', (e.re
 
 const app = document.getElementById('app');
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// A 2x pixel ratio renders 4x the fragments — on integrated GPUs that alone
+// costs ~8ms/frame at 1080p. Stylized flat shading doesn't need it.
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.25));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -38,9 +40,11 @@ scene.add(amb);
 const moon = new THREE.DirectionalLight(0xbcd0ff, 1.15);
 moon.position.set(-20, 34, 14);
 moon.castShadow = true;
-moon.shadow.mapSize.set(2048, 2048);
+// Tightened: a 2048 map over a 80-unit frustum was re-rendering hundreds of
+// casters each frame. 1024 over the visible area looks the same in motion.
+moon.shadow.mapSize.set(1024, 1024);
 const sc = moon.shadow.camera;
-sc.left = -40; sc.right = 40; sc.top = 40; sc.bottom = -40; sc.far = 120;
+sc.left = -26; sc.right = 26; sc.top = 26; sc.bottom = -26; sc.far = 90;
 moon.shadow.bias = -0.0004;
 scene.add(moon);
 const moonTarget = new THREE.Object3D(); scene.add(moonTarget); moon.target = moonTarget;
@@ -97,7 +101,7 @@ function startGame(level) {
   game = new Game(scene, level);
   game.start();
   hud.show();
-  updateCamera(1);
+  updateCamera(0, true);   // snap behind the player on spawn
   transitioning = false;
 }
 function clearScene() {
@@ -110,17 +114,27 @@ function clearScene() {
 }
 function restart() { transitioning = true; startGame(game.levelIndex); }
 
-function updateCamera(lerp) {
+// Frame-rate independent exponential smoothing. A fixed per-frame lerp makes the
+// camera feel different at every framerate and lurch whenever frames drop.
+function damp(current, target, rate, dt) {
+  return current + (target - current) * (1 - Math.exp(-rate * dt));
+}
+
+function updateCamera(dt, snap) {
   if (!game) return;
   const p = game.player;
   const z = ZOOMS[zoomIdx];
-  camYaw += (targetYaw - camYaw) * 0.08;
-  camPitch += (targetPitch - camPitch) * 0.08;
-  // Camera must clear the skyline — downtown towers reach ~12 units and will
-  // occlude the player if the eye sits too low.
+  camYaw = snap ? targetYaw : damp(camYaw, targetYaw, 6, dt);
+  camPitch = snap ? targetPitch : damp(camPitch, targetPitch, 6, dt);
   const dist = 12 * z, height = 20 * z * camPitch;
-  const target = camPos.set(p.x + Math.sin(camYaw) * dist, height, p.z + Math.cos(camYaw) * dist);
-  camera.position.lerp(target, lerp);
+  const tx = p.x + Math.sin(camYaw) * dist;
+  const tz = p.z + Math.cos(camYaw) * dist;
+  if (snap) camera.position.set(tx, height, tz);
+  else {
+    camera.position.x = damp(camera.position.x, tx, 9, dt);
+    camera.position.y = damp(camera.position.y, height, 9, dt);
+    camera.position.z = damp(camera.position.z, tz, 9, dt);
+  }
   const shx = (Math.random() - 0.5) * shake, shz = (Math.random() - 0.5) * shake;
   camera.lookAt(p.x + shx, 1.2, p.z + shz);
   playerLight.position.set(p.x, 3.7, p.z);
@@ -158,9 +172,10 @@ function step(dt) {
     game.update(dt, input);
     drainMessages();
   }
-  shake *= 0.86;
-  blastLight.intensity *= 0.86;
-  updateCamera(paused ? 1 : 0.12);
+  const decay = Math.exp(-9 * dt);
+  shake *= decay;
+  blastLight.intensity *= decay;
+  updateCamera(dt, false);
   hud.tick(dt, game);
   renderer.render(scene, camera);
 }

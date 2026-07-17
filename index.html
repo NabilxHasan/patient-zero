@@ -121,7 +121,12 @@
   <div id="fatal"></div>
 
   <script type="importmap">
-    { "imports": { "three": "./lib/three/three.module.min.js" } }
+    {
+      "imports": {
+        "three": "./lib/three/three.module.min.js",
+        "three/addons/": "./lib/three/addons/"
+      }
+    }
   </script>
   <script src="src3d/audio.js"></script>
   <script type="module" src="src3d/main.js"></script>

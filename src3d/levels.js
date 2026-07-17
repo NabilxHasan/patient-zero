@@ -46,12 +46,14 @@ export const LEVELS = [
     buildingH: [6, 12],         // downtown towers — capped so they don't block the camera
     palette: { ground: 0x161a22, fog: 0x0a0f1a, roofs: [0x2a2e3c, 0x2c3438, 0x322c38, 0x262b36] },
     props: 26, barrels: 12, healthKits: 5, trees: true,
-    initial: [{ type: 'police', count: 3 }],
+    // Every district opens quiet — the response is always something you kick off.
+    initial: [],
     responders: [
-      { pct: 0.12, type: 'police', count: 4 },
-      { pct: 0.35, type: 'police', count: 4 },
-      { pct: 0.58, type: 'military', count: 4 },
-      { pct: 0.78, type: 'military', count: 5 },
+      { pct: 0.06, type: 'police', count: 3 },
+      { pct: 0.20, type: 'police', count: 4 },
+      { pct: 0.42, type: 'police', count: 4 },
+      { pct: 0.60, type: 'military', count: 4 },
+      { pct: 0.80, type: 'military', count: 5 },
     ],
     vehicles: [
       { pct: 0.30, type: 'car', count: 2 },
@@ -70,17 +72,20 @@ export const LEVELS = [
     buildingH: [4, 9],          // squat military compounds
     palette: { ground: 0x191c18, fog: 0x0d1210, roofs: [0x3a4030, 0x333a2c, 0x2f3628, 0x424835] },
     props: 20, barrels: 16, healthKits: 6, trees: false,
-    initial: [{ type: 'military', count: 6 }, { type: 'tankUnit', count: 1 }],
+    // The garrison is here, but it still has to notice you first.
+    initial: [],
     responders: [
-      { pct: 0.15, type: 'military', count: 4 },
-      { pct: 0.40, type: 'military', count: 5 },
+      { pct: 0.04, type: 'military', count: 4 },
+      { pct: 0.18, type: 'military', count: 4 },
+      { pct: 0.42, type: 'military', count: 5 },
       { pct: 0.68, type: 'military', count: 6 },
     ],
     vehicles: [
-      { pct: 0.20, type: 'heli', count: 1 },
-      { pct: 0.35, type: 'tank', count: 1 },
-      { pct: 0.60, type: 'tank', count: 2 },
-      { pct: 0.80, type: 'heli', count: 2 },
+      { pct: 0.12, type: 'tank', count: 1 },
+      { pct: 0.28, type: 'heli', count: 1 },
+      { pct: 0.50, type: 'tank', count: 1 },
+      { pct: 0.70, type: 'tank', count: 2 },
+      { pct: 0.85, type: 'heli', count: 2 },
     ],
   },
 ];
