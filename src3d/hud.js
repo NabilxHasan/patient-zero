@@ -29,6 +29,18 @@ export class HUD {
       this.powersEl.appendChild(d);
       this.slots[type] = { el: d, num: d.querySelector('.n'), color: hex };
     }
+    this.order = Object.keys(POWERS);
+    this.sel = 0;
+    this._markSel();
+  }
+
+  _markSel() {
+    this.order.forEach((t, i) => this.slots[t].el.classList.toggle('sel', i === this.sel));
+  }
+  selectedPower() { return this.order[this.sel]; }
+  cyclePower(dir) {
+    this.sel = (this.sel + dir + this.order.length) % this.order.length;
+    this._markSel();
   }
 
   // brief pop when a power fires

@@ -32,7 +32,7 @@ export class Game {
     this.barrels = []; this.kits = []; this.vehicles = []; this.shells = [];
     this.debris = []; this.healers = []; this.beams = [];
     this.powerPickups = []; this.gasClouds = []; this.rings = [];
-    this.powers = { gas: 0, stun: 0, horde: 0, rage: 0 };
+    this.powers = { gas: 0, stun: 0, horde: 0, rage: 0, hulk: 0 };
     this.rageUntil = 0;
     this.healed = 0;
     this.parts = new ParticlePool(this.scene);
@@ -52,6 +52,8 @@ export class Game {
     this.player.maxHp = cfg.playerHp;
     this.lungeReadyAt = 0; this.lungeUntil = 0; this.invulnUntil = 0;
     this.nextRegenAt = 9;
+    this.player.y = 0; this.player.vy = 0; this.player.airborne = false;
+    this.hulkUntil = 0;
     this.dir = new THREE.Vector2(0, 1);
 
     // soft ground glow (replaces the hard-edged disc that read as an artifact)
@@ -173,8 +175,66 @@ export class Game {
       this.parts.burst(p.x, 1, p.z, 0xFF6A4A, 20);
       AudioFX.lunge();
       this.msgs.push({ type: 'stinger', text: 'ADRENAL SURGE' });
+
+    } else if (type === 'hulk') {
+      this.hulkUntil = this.time + 18;
+      this.parts.burst(p.x, 1, p.z, 0x6ad24a, 40);
+      AudioFX.stinger();
+      this.msgs.push({ type: 'shake', amt: 0.9 });
+      this.msgs.push({ type: 'stinger', text: 'BIOMASS BLOOM' });
     }
     return true;
+  }
+
+  // Left-click swipe: infects whoever is in front of you, or mauls a responder.
+  strike() {
+    if (this.over || this.time < (this.nextStrike || 0)) return;
+    const hulk = this.time < this.hulkUntil;
+    this.nextStrike = this.time + (hulk ? 0.25 : 0.4);
+    const p = this.player;
+    const reach = hulk ? 3.2 : 1.9;
+    const fx = this.dir.x, fz = this.dir.y;
+    const inArc = (e) => {
+      const dx = e.x - p.x, dz = e.z - p.z;
+      const d = Math.hypot(dx, dz);
+      if (d > reach) return false;
+      return (dx / d) * fx + (dz / d) * fz > 0.25;   // roughly in front
+    };
+    this.parts.burst(p.x + fx * 1.2, 1.1, p.z + fz * 1.2, hulk ? 0x6ad24a : 0x53ff7a, hulk ? 12 : 6);
+    AudioFX.lunge();
+    let hit = false;
+    for (const c of this.civs) if (!c.turning && inArc(c)) { this.infect(c, true); hit = true; if (!hulk) break; }
+    for (const cop of this.cops.slice()) if (inArc(cop)) { this.bite(cop, hulk ? 99 : 2); hit = true; if (!hulk) break; }
+    for (const h of this.healers.slice()) if (inArc(h)) { this.hitHealer(h, hulk ? 99 : 2); hit = true; }
+    if (hulk) for (const v of this.vehicles.slice()) {
+      if (v.vtype !== 'heli' && Math.hypot(v.x - p.x, v.z - p.z) < reach + 1.4) { this.damageVehicle(v, 5); hit = true; }
+    }
+    for (const b of this.barrels) if (!b.dead && Math.hypot(b.x - p.x, b.z - p.z) < reach + 0.4) this.popBarrel(b);
+    if (hit) this.msgs.push({ type: 'shake', amt: hulk ? 0.35 : 0.15 });
+  }
+
+  // Landing shockwave while transformed.
+  groundPound() {
+    const p = this.player, radius = 7;
+    this.parts.burst(p.x, 0.3, p.z, 0x6ad24a, 26);
+    this.msgs.push({ type: 'blast', x: p.x, z: p.z });
+    for (const cop of this.cops.slice()) {
+      if (Math.hypot(cop.x - p.x, cop.z - p.z) < radius) this.bite(cop, 99);
+    }
+    for (const pr of this.city.props) {
+      const d = Math.hypot(pr.x - p.x, pr.z - p.z);
+      if (d < radius) { const a = Math.atan2(pr.z - p.z, pr.x - p.x); const f = (1 - d / radius) * 18; pr.vx += Math.cos(a) * f; pr.vz += Math.sin(a) * f; pr.spin = 8; }
+    }
+    for (const t of this.city.trees) if (!t.broken && Math.hypot(t.x - p.x, t.z - p.z) < radius) this.breakTree(t);
+    for (const v of this.vehicles.slice()) {
+      if (v.vtype !== 'heli' && Math.hypot(v.x - p.x, v.z - p.z) < radius) this.damageVehicle(v, 6);
+    }
+  }
+
+  damageVehicle(v, dmg) {
+    v.hp -= dmg;
+    this.parts.burst(v.x, 1, v.z, 0xffa53a, 8);
+    if (v.hp <= 0) this.destroyVehicle(v);
   }
 
   spawnVehicle(x, z, vtype) {
@@ -367,6 +427,18 @@ export class Game {
     }
     // bites — a dash is a takedown, a walk-up mauling is not
     const dashing = this.time < this.lungeUntil;
+    // Transformed, a dash wrecks vehicles outright: a car dies in one, a tank
+    // needs two (7 dmg vs 14 hp).
+    if (dashing && this.time < this.hulkUntil) {
+      for (const v of this.vehicles.slice()) {
+        if (v.vtype === 'heli') continue;
+        if (this.dist(this.player, v) < 3.0 && this.time > (v.lastRam || 0) + 0.4) {
+          v.lastRam = this.time;
+          this.msgs.push({ type: 'shake', amt: 0.6 });
+          this.damageVehicle(v, v.vtype === 'car' ? 99 : 7);
+        }
+      }
+    }
     for (const cop of this.cops) {
       if (this.dist(this.player, cop) < BITE_DIST + (dashing ? 0.5 : 0)) this.bite(cop, dashing ? 99 : 2);
       else for (const z of this.zombies) if (this.dist(z, cop) < BITE_DIST) { this.bite(cop, 1); break; }
@@ -405,7 +477,8 @@ export class Game {
     const lunging = this.time < this.lungeUntil;
     if (!lunging) {
       const raging = this.time < this.rageUntil;
-      const spd = raging ? 9 : 6;
+      const hulk = this.time < this.hulkUntil;
+      const spd = (raging ? 9 : 6) * (hulk ? 1.25 : 1);
       const dx = input.mx || 0, dz = input.mz || 0;
       if (dx || dz) {
         const l = Math.hypot(dx, dz); this.dir.set(dx / l, dz / l);
@@ -413,7 +486,8 @@ export class Game {
       } else { p.vx = 0; p.vz = 0; }
       if (input.lunge && this.time > this.lungeReadyAt) {
         this.lungeReadyAt = this.time + (raging ? 0.35 : 1.6); this.lungeUntil = this.time + 0.2;
-        p.vx = this.dir.x * (raging ? 22 : 17); p.vz = this.dir.y * (raging ? 22 : 17);
+        const boost = (raging ? 22 : 17) * (hulk ? 1.2 : 1);
+        p.vx = this.dir.x * boost; p.vz = this.dir.y * boost;
         AudioFX.lunge(); this.parts.burst(p.x, 1, p.z, 0x53ff7a, 6);
       }
     }
@@ -422,20 +496,61 @@ export class Game {
       for (const t of this.city.trees) if (!t.broken && Math.hypot(t.x - p.x, t.z - p.z) < 1.5) this.breakTree(t);
       for (const b of this.barrels) if (!b.dead && Math.hypot(b.x - p.x, b.z - p.z) < 1.5) this.popBarrel(b);
     }
+    // --- vertical: jump, gravity, landing ---
+    const hulkNow = this.time < this.hulkUntil;
+    if (input.jump && !p.airborne) {
+      p.vy = hulkNow ? 15 : 12;
+      p.airborne = true;
+      AudioFX.lunge();
+      this.parts.burst(p.x, 0.2, p.z, 0x9fffc4, 8);
+    }
+    if (p.airborne || p.y > 0) {
+      p.vy -= 26 * dt;
+      p.y += p.vy * dt;
+      if (p.y <= 0) {
+        p.y = 0; p.vy = 0;
+        if (p.airborne) {
+          p.airborne = false;
+          this.parts.burst(p.x, 0.2, p.z, 0xbfd4ff, hulkNow ? 18 : 6);
+          if (hulkNow) { this.msgs.push({ type: 'shake', amt: 0.5 }); this.groundPound(); }
+        }
+      }
+    }
+    // Hulk slams gunships out of the sky mid-jump.
+    if (hulkNow && p.y > 3) {
+      for (const v of this.vehicles.slice()) {
+        if (v.vtype !== 'heli') continue;
+        if (Math.hypot(v.x - p.x, v.z - p.z) < 4 && Math.abs(v.y - p.y) < 4.5) {
+          this.parts.burst(v.x, v.y, v.z, 0xffa53a, 30);
+          this.destroyVehicle(v);
+          p.vy = Math.max(p.vy, 6);          // bounce off the wreck
+        }
+      }
+    }
     if (this.time > this.nextRegenAt) { this.nextRegenAt = this.time + 9; if (p.hp < p.maxHp) p.hp++; }
     this.lungeCooldown = THREE.MathUtils.clamp((this.lungeReadyAt - this.time) / (this.time < this.rageUntil ? 0.35 : 1.6), 0, 1);
+
+    // grow/shrink into the transformed silhouette
+    const wantScale = hulkNow ? 2.2 : 1.15;
+    this.playerScale = this.playerScale || 1.15;
+    this.playerScale += (wantScale - this.playerScale) * (1 - Math.exp(-7 * dt));
+    p.mesh.scale.setScalar(this.playerScale);
+
     this.aura.position.set(p.x, 0.05, p.z);
-    const s = 1 + Math.sin(this.time * 4) * 0.08; this.aura.scale.setScalar(s);
+    const s = (1 + Math.sin(this.time * 4) * 0.08) * (hulkNow ? 1.7 : 1);
+    this.aura.scale.setScalar(s);
   }
 
   moveEntity(e, dt) {
     const nx = e.x + e.vx * dt, nz = e.z + e.vz * dt;
-    const r = this.city.collide(nx, nz, R);
+    const r = this.city.collide(nx, nz, R, e.y || 0);
     e.x = r.x; e.z = r.z;
     const moving = Math.hypot(e.vx, e.vz) > 0.4;
     e.mesh.position.x = e.x; e.mesh.position.z = e.z;
     if (moving) e.mesh.rotation.y = Math.atan2(e.vx, e.vz);
-    animateWalk(e.mesh, Math.hypot(e.vx, e.vz), dt, moving);
+    animateWalk(e.mesh, Math.hypot(e.vx, e.vz), dt, moving && !e.airborne);
+    // animateWalk owns mesh.y for the walk bob, so jump height is applied after
+    if (e.y) e.mesh.position.y += e.y;
     // shove street props out of the way
     for (const p of this.city.props) {
       const d = Math.hypot(p.x - e.x, p.z - e.z);

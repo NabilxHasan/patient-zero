@@ -318,6 +318,7 @@ export const POWERS = {
   stun:  { key: '2', color: 0x4AC8FF, label: 'STUN',  name: 'SHOCK CHARGE' },
   horde: { key: '3', color: 0xC46AFF, label: 'HORDE', name: 'HIVE CALL' },
   rage:  { key: '4', color: 0xFF6A4A, label: 'RAGE',  name: 'ADRENAL SURGE' },
+  hulk:  { key: '5', color: 0x6AD24A, label: 'HULK',  name: 'BIOMASS BLOOM' },
 };
 
 export function makePowerPickup(type) {
@@ -335,6 +336,11 @@ export function makePowerPickup(type) {
     const horn = cyl(0.1, 0.5, 0x2b2f38, {}); horn.position.y = 0.45; horn.rotation.z = 0.3; g.add(horn);
     const bell = new THREE.Mesh(new THREE.ConeGeometry(0.26, 0.4, 8), mat(c, c, 2.2));
     bell.position.set(0.14, 0.8, 0); bell.rotation.z = 0.3; g.add(bell);
+  } else if (type === 'hulk') {
+    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.3, 1), mat(c, c, 2.6));
+    core.position.y = 0.5; g.add(core);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.05, 6, 12), mat(0x2f7a4c, c, 1.6));
+    ring.position.y = 0.5; ring.rotation.x = Math.PI / 2; g.add(ring);
   } else {
     const spike = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.7, 6), mat(c, c, 2.2));
     spike.position.y = 0.5; g.add(spike);
@@ -424,6 +430,19 @@ export function makeProp(type) {
   } else {
     const b = box(0.8, 0.8, 0.8, 0x7a5a34, {}); b.position.y = 0.4; g.add(b);
     const t = box(0.84, 0.1, 0.14, 0x5c4426, { cast: false }); t.position.y = 0.62; g.add(t);
+  }
+  return g;
+}
+
+// Park bench — low enough to vault.
+export function makeBench() {
+  const g = new THREE.Group();
+  const wood = 0x6b4a2a, iron = 0x2b2f36;
+  g.add(box(1.9, 0.1, 0.5, wood, { cast: true }).translateY(0.5));      // seat
+  g.add(box(1.9, 0.5, 0.1, wood, {}).translateY(0.78).translateZ(-0.22)); // back
+  for (const x of [-0.75, 0.75]) {
+    g.add(box(0.1, 0.5, 0.46, iron, {}).translateX(x).translateY(0.25));
+    g.add(box(0.1, 0.3, 0.1, iron, {}).translateX(x).translateY(0.9).translateZ(-0.22));
   }
   return g;
 }

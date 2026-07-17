@@ -49,10 +49,19 @@
       opacity: 0.4; transition: opacity 0.15s, border-color 0.15s, transform 0.1s;
     }
     #powers .slot.has { opacity: 1; }
+    #powers .slot.sel { border-color: #49ff8c; box-shadow: 0 0 8px rgba(73,255,140,0.4); }
     #powers .slot.fire { transform: scale(1.18); }
     #powers .k { font-size: 10px; color: #6b7280; }
     #powers .n { font-size: 15px; font-weight: bold; }
     #powers .l { font-size: 9px; letter-spacing: 1px; }
+    #minimap {
+      position: absolute; right: 14px; top: 46px;
+      border: 1px solid #2b323c; border-radius: 4px; background: rgba(8,11,16,0.7);
+    }
+    #minimap.full {
+      right: 50%; top: 50%; transform: translate(50%, -50%);
+      border-color: #49ff8c; z-index: 20;
+    }
     #rage {
       position: absolute; left: 50%; transform: translateX(-50%); bottom: 96px;
       font-size: 13px; color: #FF6A4A; font-weight: bold; opacity: 0; letter-spacing: 2px;
@@ -131,6 +140,7 @@
       <div id="lungeWrap"><div id="lunge"></div></div>
     </div>
     <div id="stats"></div>
+    <canvas id="minimap"></canvas>
     <div id="powers"></div>
     <div id="rage">ADRENAL SURGE</div>
     <div id="stinger"></div>

@@ -5,7 +5,8 @@ import * as THREE from 'three';
 import { Game } from './game.js';
 import { HUD } from './hud.js';
 import { LEVELS } from './levels.js';
-import { loadUser, saveUser, addScore, topScores } from './scores.js';
+import { loadUser, saveUser, addScore, topScores, loadProgress, saveProgress } from './scores.js';
+import { Minimap } from './minimap.js';
 
 function showFatal(label, detail) {
   const el = document.getElementById('fatal');
@@ -58,20 +59,31 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  if (typeof minimap !== 'undefined') minimap.resize();
 });
 
 // ---- input ----
 const keys = { W: false, A: false, S: false, D: false };
-const input = { mx: 0, mz: 0, lunge: false };
+const input = { mx: 0, mz: 0, lunge: false, jump: false };
+let lastSpaceAt = -1;
 const codeMap = { KeyW: 'W', KeyA: 'A', KeyS: 'S', KeyD: 'D', ArrowUp: 'W', ArrowLeft: 'A', ArrowDown: 'S', ArrowRight: 'D' };
-const POWER_KEYS = { Digit1: 'gas', Digit2: 'stun', Digit3: 'horde', Digit4: 'rage' };
+const POWER_KEYS = { Digit1: 'gas', Digit2: 'stun', Digit3: 'horde', Digit4: 'rage', Digit5: 'hulk' };
 addEventListener('keydown', e => {
   // Escape always toggles the pause menu, even while paused.
   if (e.code === 'Escape') { e.preventDefault(); if (game && !transitioning) { paused ? resume() : pause(true); } return; }
   // focus-loss pause resumes on any key; the Escape menu only on Escape/buttons
   if (paused) { if (!pauseIsMenu) resume(); return; }
   if (codeMap[e.code]) keys[codeMap[e.code]] = true;
-  if (e.code === 'Space') { input.lunge = true; e.preventDefault(); }
+  if (e.code === 'Space' && !e.repeat) {
+    e.preventDefault();
+    const now = performance.now();
+    // First tap dashes immediately (delaying it to wait for a second tap would
+    // make the dash feel laggy); a second tap inside the window jumps.
+    if (now - lastSpaceAt < 300) { input.jump = true; }
+    else { input.lunge = true; }
+    lastSpaceAt = now;
+  }
+  if (e.code === 'Tab') { e.preventDefault(); minimap.toggleFull(); }
   if (POWER_KEYS[e.code] && game && !game.over) {
     const t = POWER_KEYS[e.code];
     if (game.usePower(t)) hud.firePower(t);
@@ -84,6 +96,29 @@ addEventListener('keyup', e => {
   if (codeMap[e.code]) keys[codeMap[e.code]] = false;
   if (e.code === 'Space') input.lunge = false;
 });
+
+// ---- mouse: right-click cycles camera, left-click strikes, wheel cycles powers ----
+const CAM_MODES = ['top', 'tpp', 'fpp'];
+let camMode = 0;
+const app_ = document.getElementById('app');
+app_.addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('mousedown', e => {
+  if (paused || !game || game.over) return;
+  if (e.button === 2) {
+    camMode = (camMode + 1) % CAM_MODES.length;
+    hud.setHeadline(`[ CAMERA — ${CAM_MODES[camMode].toUpperCase()} ]`);
+  } else if (e.button === 0) {
+    game.strike();
+  } else if (e.button === 1) {
+    e.preventDefault();
+    const t = hud.selectedPower();
+    if (t && game.usePower(t)) hud.firePower(t);
+  }
+});
+addEventListener('wheel', e => {
+  if (paused || !game) return;
+  hud.cyclePower(e.deltaY > 0 ? 1 : -1);
+}, { passive: true });
 
 // ---- mouse look: orbits the camera around patient zero ----
 let camYaw = 0, targetYaw = 0, camPitch = 1, targetPitch = 1;
@@ -99,6 +134,8 @@ let zoomIdx = 1;
 function cycleZoom() { zoomIdx = (zoomIdx + 1) % ZOOMS.length; if (hud) hud.setHeadline(`[ ZOOM ${ZOOMS[zoomIdx].toFixed(2)}x ]`); }
 
 const hud = new HUD();
+const minimap = new Minimap();
+minimap.resize();
 let game = null;
 let shake = 0;
 let transitioning = false;
@@ -134,18 +171,39 @@ function updateCamera(dt, snap) {
   const z = ZOOMS[zoomIdx];
   camYaw = snap ? targetYaw : damp(camYaw, targetYaw, 6, dt);
   camPitch = snap ? targetPitch : damp(camPitch, targetPitch, 6, dt);
-  const dist = 12 * z, height = 20 * z * camPitch;
-  const tx = p.x + Math.sin(camYaw) * dist;
-  const tz = p.z + Math.cos(camYaw) * dist;
-  if (snap) camera.position.set(tx, height, tz);
-  else {
-    camera.position.x = damp(camera.position.x, tx, 9, dt);
-    camera.position.y = damp(camera.position.y, height, 9, dt);
-    camera.position.z = damp(camera.position.z, tz, 9, dt);
-  }
+  const mode = CAM_MODES[camMode];
+  const py = p.y || 0;
   const shx = (Math.random() - 0.5) * shake, shz = (Math.random() - 0.5) * shake;
-  camera.lookAt(p.x + shx, 1.2, p.z + shz);
-  playerLight.position.set(p.x, 3.7, p.z);
+
+  if (mode === 'fpp') {
+    // eyes-in-the-skull: sit at head height and look along the aim vector
+    const eye = 1.6 * (game.playerScale || 1.15) / 1.15;
+    camera.position.set(p.x, py + eye + 0.2, p.z);
+    const look = new THREE.Vector3(
+      p.x - Math.sin(camYaw) * 10 + shx,
+      py + eye + 0.2 - (camPitch - 1) * 12,
+      p.z - Math.cos(camYaw) * 10 + shz
+    );
+    camera.lookAt(look);
+    p.mesh.visible = false;                  // don't render the inside of our own head
+  } else {
+    p.mesh.visible = true;
+    const tpp = mode === 'tpp';
+    const dist = (tpp ? 5.5 : 12) * z;
+    const height = (tpp ? 2.6 : 20 * camPitch) * z;
+    const tx = p.x + Math.sin(camYaw) * dist;
+    const tz = p.z + Math.cos(camYaw) * dist;
+    const ty = py + height;
+    if (snap) camera.position.set(tx, ty, tz);
+    else {
+      const rate = tpp ? 14 : 9;
+      camera.position.x = damp(camera.position.x, tx, rate, dt);
+      camera.position.y = damp(camera.position.y, ty, rate, dt);
+      camera.position.z = damp(camera.position.z, tz, rate, dt);
+    }
+    camera.lookAt(p.x + shx, py + (tpp ? 1.5 : 1.2), p.z + shz);
+  }
+  playerLight.position.set(p.x, py + 3.7, p.z);
   moon.position.set(p.x - 20, 34, p.z + 14);
   moonTarget.position.set(p.x, 0, p.z);
 }
@@ -178,6 +236,7 @@ function step(dt) {
   if (game && !paused && !transitioning) {
     computeMove();
     game.update(dt, input);
+    input.jump = false;          // one-shot; consumed by this tick
     drainMessages();
   }
   const decay = Math.exp(-9 * dt);
@@ -185,6 +244,7 @@ function step(dt) {
   blastLight.intensity *= decay;
   updateCamera(dt, false);
   hud.tick(dt, game);
+  if (game) minimap.draw(game);
   renderer.render(scene, camera);
 }
 
@@ -284,21 +344,39 @@ function showMenu() {
       <input id="nameIn" maxlength="14" value="${escapeHTML(user)}" placeholder="patient zero">
     </div>
     <button class="btn pulse" id="startBtn">[ BEGIN THE OUTBREAK ]</button>
-    <div class="keys">WASD move · MOUSE look · SPACE dash · 1-4 powers · ESC pause · Z zoom · M mute · R restart</div>
+    <div class="keys">WASD move · MOUSE look · SPACE dash · SPACE×2 jump · LMB strike · RMB camera · WHEEL+MMB powers · 1-5 powers · TAB map · ESC pause</div>
     <div class="boardWrap">${boardHTML()}</div>`);
   const nameIn = el.querySelector('#nameIn');
-  const go = () => {
+  const go = (lvl) => {
     const n = (nameIn.value || '').trim() || 'PATIENT ZERO';
     saveUser(n);
     AudioFX.resume(); AudioFX.click();
-    clearScreens(); startGame(0);
+    clearScreens(); startGame(lvl || 0);
   };
-  el.querySelector('#startBtn').onclick = go;
-  nameIn.addEventListener('keydown', e => { e.stopPropagation(); if (e.code === 'Enter') go(); });
+  el.querySelector('#startBtn').onclick = () => go(0);
+  nameIn.addEventListener('keydown', e => { e.stopPropagation(); if (e.code === 'Enter') go(0); });
+
+  // checkpoint: jump straight to any district already cleared
+  const unlocked = loadProgress();
+  if (unlocked > 0) {
+    const wrap = document.createElement('div');
+    wrap.style.marginTop = '4px';
+    wrap.innerHTML = '<div class="small">CHECKPOINT — RESUME AT</div>';
+    for (let i = 0; i <= unlocked && i < LEVELS.length; i++) {
+      const b = document.createElement('button');
+      b.className = 'btn';
+      b.style.fontSize = '15px';
+      b.textContent = `[ DISTRICT ${i + 1} ]`;
+      b.onclick = () => go(i);
+      wrap.appendChild(b);
+    }
+    el.querySelector('#startBtn').insertAdjacentElement('afterend', wrap);
+  }
 }
 
 function showEnd(m) {
   const final = m.win && m.level === LEVELS.length - 1;
+  if (m.win) saveProgress(m.level + 1);   // checkpoint
   const name = loadUser();
   const score = m.infected * 10 + (m.kills || 0) * 5 + (m.win ? 500 : 0) + (m.win ? Math.max(0, 300 - m.seconds) : 0);
   addScore({ name, score, district: m.level + 1, seconds: m.seconds, infected: m.infected, win: m.win });

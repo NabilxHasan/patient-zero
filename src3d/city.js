@@ -3,7 +3,7 @@
 // props, parked cars, streetlights, and a quarantine border with watchtowers.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { box, mat, makeTree, makeProp, makeBorderWall, groundGlow, makeCivCar } from './models.js';
+import { box, mat, makeTree, makeProp, makeBorderWall, groundGlow, makeCivCar, makeBench } from './models.js';
 import { BLOCK, STREET, CELL } from './levels.js';
 
 // The city never moves, so its meshes are baked into one merged mesh per
@@ -150,7 +150,7 @@ export function buildCity(scene, cfg) {
       const sw = new THREE.Mesh(new THREE.PlaneGeometry(BLOCK + 2.6, BLOCK + 2.6), sidewalkMat);
       sw.rotation.x = -Math.PI / 2; sw.position.set(bx, 0.005, bz); sw.receiveShadow = true; stat.add(sw);
 
-      if (Math.random() < cfg.parkChance) park(stat, group, bx, bz, cfg, trees, waters);
+      if (Math.random() < cfg.parkChance) park(stat, group, bx, bz, cfg, trees, waters, blockers);
       else building(stat, bx, bz, blockers, cfg);
 
       if (Math.random() < 0.5) car(stat, bx, bz, blockers);
@@ -180,8 +180,9 @@ export function buildCity(scene, cfg) {
   const { merged } = mergeStatic(stat);
   group.add(merged);
 
-  function insideBlocked(x, z, pad = 0.5) {
+  function insideBlocked(x, z, pad = 0.5, y = 0) {
     for (const b of blockers) {
+      if (y > (b.top ?? 99)) continue;                 // cleared it
       if (Math.abs(x - b.x) < b.hw + pad && Math.abs(z - b.z) < b.hh + pad) return true;
     }
     return false;
@@ -202,8 +203,10 @@ export function buildCity(scene, cfg) {
     }
     return randomStreetPointRaw();
   }
-  function collide(x, z, rad) {
+  // `y` is the actor's feet height — jump over anything shorter than that.
+  function collide(x, z, rad, y = 0) {
     for (const b of blockers) {
+      if (y > (b.top ?? 99)) continue;
       const dx = x - b.x, dz = z - b.z;
       const ox = b.hw + rad - Math.abs(dx);
       const oz = b.hh + rad - Math.abs(dz);
@@ -298,10 +301,10 @@ function building(stat, cx, cz, blockers, cfg) {
   // entrance canopy so the ground floor reads
   const door = box(1.4, 0.12, 0.5, 0x2a2f38, { cast: false });
   door.position.set(cx, 2.1, cz + d / 2 + 0.2); stat.add(door);
-  blockers.push({ x: cx, z: cz, hw: w / 2, hh: d / 2 });
+  blockers.push({ x: cx, z: cz, hw: w / 2, hh: d / 2, top: h });
 }
 
-function park(stat, group, cx, cz, cfg, trees, waters) {
+function park(stat, group, cx, cz, cfg, trees, waters, blockers) {
   const grass = new THREE.Mesh(new THREE.PlaneGeometry(BLOCK, BLOCK), mat(0x1d3322, 0x000000, 1, 1));
   grass.rotation.x = -Math.PI / 2; grass.position.set(cx, 0.02, cz); grass.receiveShadow = true; stat.add(grass);
 
@@ -314,6 +317,18 @@ function park(stat, group, cx, cz, cfg, trees, waters) {
     // damp rim
     const rim = new THREE.Mesh(new THREE.RingGeometry(r, r + 0.35, 32), mat(0x24302a, 0x000000, 1, 1));
     rim.rotation.x = -Math.PI / 2; rim.position.set(w.position.x, 0.04, w.position.z); stat.add(rim);
+  }
+
+  // benches line the paths — vault them with a jump
+  for (let i = 0; i < 3; i++) {
+    const horiz = Math.random() < 0.5;
+    const bx2 = cx + (horiz ? (Math.random() - 0.5) * (BLOCK - 4) : (Math.random() < 0.5 ? -1 : 1) * 2.6);
+    const bz2 = cz + (horiz ? (Math.random() < 0.5 ? -1 : 1) * 2.6 : (Math.random() - 0.5) * (BLOCK - 4));
+    const bench = makeBench();
+    bench.position.set(bx2, 0, bz2);
+    bench.rotation.y = horiz ? 0 : Math.PI / 2;
+    stat.add(bench);
+    blockers.push({ x: bx2, z: bz2, hw: horiz ? 0.95 : 0.3, hh: horiz ? 0.3 : 0.95, top: 1.0 });
   }
 
   if (cfg.trees !== false) {
@@ -340,7 +355,7 @@ function car(stat, cx, cz, blockers) {
   stat.add(g);
   const L = 4.0, Wd = 1.9;
   const w = horiz ? L : Wd, d = horiz ? Wd : L;
-  blockers.push({ x, z, hw: w / 2, hh: d / 2 });
+  blockers.push({ x, z, hw: w / 2, hh: d / 2, top: 1.4 });
 }
 
 // Lamps are emissive geometry plus a glow quad on the ground — no real

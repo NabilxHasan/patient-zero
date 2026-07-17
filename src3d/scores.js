@@ -38,3 +38,14 @@ export function addScore(entry) {
 }
 
 export function topScores(n = 6) { return allScores().slice(0, n); }
+
+// ---- checkpoints: highest district unlocked (0-based) ----
+const PROG_KEY = 'pz3d_progress';
+export function loadProgress() {
+  const n = parseInt(safeGet(PROG_KEY, '0'), 10);
+  return Number.isFinite(n) ? Math.max(0, Math.min(2, n)) : 0;
+}
+export function saveProgress(idx) {
+  if (idx > loadProgress()) safeSet(PROG_KEY, String(idx));
+}
+export function resetProgress() { safeSet(PROG_KEY, '0'); }
