@@ -32,6 +32,38 @@ export function cyl(r, h, color, opts = {}) {
   return m;
 }
 
+// Soft radial gradient — used for ground glow so it fades out instead of
+// rendering as a hard-edged disc.
+let _glowTex = null;
+export function glowTexture() {
+  if (_glowTex) return _glowTex;
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.45, 'rgba(255,255,255,0.45)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  _glowTex = new THREE.CanvasTexture(c);
+  return _glowTex;
+}
+
+// Soft ground glow quad (additive, no hard edge, never z-fights).
+export function groundGlow(color, size, opacity = 0.5) {
+  const m = new THREE.Mesh(
+    new THREE.PlaneGeometry(size, size),
+    new THREE.MeshBasicMaterial({
+      map: glowTexture(), color, transparent: true, opacity,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    })
+  );
+  m.rotation.x = -Math.PI / 2;
+  m.renderOrder = 2;
+  return m;
+}
+
 // A limb that pivots at its top (hip/shoulder). box hangs below the pivot.
 function limb(px, py, pz, w, len, d, color) {
   const pivot = new THREE.Group();
@@ -163,3 +195,148 @@ export function animateWalk(g, speed, dt, moving) {
     parts.heart.scale.setScalar(pulse);
   }
 }
+
+// ---------------------------------------------------------------- world objects
+
+export function makeBarrel() {
+  const g = new THREE.Group();
+  const body = cyl(0.42, 1.1, 0xb03a2a, { roughness: 0.7 });
+  body.position.y = 0.55; g.add(body);
+  const band = cyl(0.45, 0.14, 0x2a2f38, {}); band.position.y = 0.72; g.add(band);
+  const top = cyl(0.42, 0.1, 0xd45a3a, { emissive: 0x501008, emissiveIntensity: 0.6 }); top.position.y = 1.12; g.add(top);
+  // hazard stripe glow so they read at a glance
+  const warn = box(0.2, 0.4, 0.02, 0xffb03a, { emissive: 0xff8a00, emissiveIntensity: 2, cast: false });
+  warn.position.set(0, 0.6, 0.44); g.add(warn);
+  g.userData.glow = groundGlow(0xff6a2a, 3, 0.25);
+  g.userData.glow.position.y = 0.03;
+  g.add(g.userData.glow);
+  return g;
+}
+
+export function makeHealthKit() {
+  const g = new THREE.Group();
+  const b = box(0.6, 0.4, 0.6, 0xf2f2f2, { roughness: 0.6 }); b.position.y = 0.25; g.add(b);
+  const c1 = box(0.36, 0.12, 0.12, 0xe03a3a, { emissive: 0xe03a3a, emissiveIntensity: 1.4 }); c1.position.y = 0.47; g.add(c1);
+  const c2 = box(0.12, 0.12, 0.36, 0xe03a3a, { emissive: 0xe03a3a, emissiveIntensity: 1.4 }); c2.position.y = 0.47; g.add(c2);
+  const glow = groundGlow(0x40ff70, 2.6, 0.3); glow.position.y = 0.03; g.add(glow);
+  return g;
+}
+
+// Pushable street prop (crate / bin) — knocked around on contact.
+export function makeProp(type) {
+  const g = new THREE.Group();
+  if (type === 'bin') {
+    const b = cyl(0.36, 0.9, 0x3d4a3a, {}); b.position.y = 0.45; g.add(b);
+    const lid = cyl(0.4, 0.1, 0x4d5c48, {}); lid.position.y = 0.94; g.add(lid);
+  } else {
+    const b = box(0.8, 0.8, 0.8, 0x7a5a34, {}); b.position.y = 0.4; g.add(b);
+    const t = box(0.84, 0.1, 0.14, 0x5c4426, { cast: false }); t.position.y = 0.62; g.add(t);
+  }
+  return g;
+}
+
+// Breakable tree — returns group with trunk/foliage so it can shatter.
+export function makeTree() {
+  const g = new THREE.Group();
+  const trunk = box(0.3, 1, 0.3, 0x4a3320, {}); trunk.position.y = 0.5; g.add(trunk);
+  const f1 = box(1.4, 1.4, 1.4, 0x2c4a2e, {}); f1.position.y = 1.6; g.add(f1);
+  const f2 = box(0.9, 0.9, 0.9, 0x3a5e3a, {}); f2.position.y = 2.3; g.add(f2);
+  g.userData.chunks = [trunk, f1, f2];
+  return g;
+}
+
+// ---------------------------------------------------------------- vehicles
+
+export function makePoliceCar() {
+  const g = new THREE.Group();
+  const body = box(1.9, 0.6, 4.0, 0x1f3f8a, { roughness: 0.5 }); body.position.y = 0.55; g.add(body);
+  const cabin = box(1.7, 0.55, 1.9, 0x14264f, {}); cabin.position.set(0, 1.05, -0.15); g.add(cabin);
+  const glass = box(1.55, 0.4, 0.1, 0x9fb4c4, { roughness: 0.2 }); glass.position.set(0, 1.05, 0.82); g.add(glass);
+  const stripe = box(1.95, 0.22, 1.4, 0xf2f2f2, { cast: false }); stripe.position.set(0, 0.55, 0.6); g.add(stripe);
+  // light bar
+  const red = box(0.5, 0.16, 0.3, 0xff3030, { emissive: 0xff2020, emissiveIntensity: 3, cast: false });
+  red.position.set(-0.4, 1.4, -0.15); g.add(red);
+  const blue = box(0.5, 0.16, 0.3, 0x3060ff, { emissive: 0x2040ff, emissiveIntensity: 3, cast: false });
+  blue.position.set(0.4, 1.4, -0.15); g.add(blue);
+  for (const [x, z] of [[-0.95, 1.3], [0.95, 1.3], [-0.95, -1.3], [0.95, -1.3]]) {
+    const w = cyl(0.35, 0.25, 0x14161c, {}); w.rotation.z = Math.PI / 2; w.position.set(x, 0.35, z); g.add(w);
+  }
+  g.userData.beacons = [red, blue];
+  return g;
+}
+
+export function makeTank() {
+  const g = new THREE.Group();
+  const hull = box(2.6, 0.8, 4.4, 0x46512e, { roughness: 0.8 }); hull.position.y = 0.75; g.add(hull);
+  const skirt = box(2.9, 0.5, 4.2, 0x333c22, {}); skirt.position.y = 0.4; g.add(skirt);
+  const turret = new THREE.Group(); turret.position.set(0, 1.25, -0.2); g.add(turret);
+  const tBody = box(1.8, 0.7, 2.2, 0x525e36, {}); turret.add(tBody);
+  const barrel = box(0.26, 0.26, 2.8, 0x3a4228, {}); barrel.position.set(0, 0.05, 1.6); turret.add(barrel);
+  const muzzle = new THREE.Object3D(); muzzle.position.set(0, 0.05, 3.1); turret.add(muzzle);
+  // treads
+  for (const x of [-1.45, 1.45]) {
+    const tread = box(0.45, 0.7, 4.5, 0x1c2116, {}); tread.position.set(x, 0.45, 0); g.add(tread);
+  }
+  g.userData.turret = turret;
+  g.userData.muzzle = muzzle;
+  return g;
+}
+
+export function makeHelicopter() {
+  const g = new THREE.Group();
+  const body = box(1.4, 1.1, 3.6, 0x3c4630, { roughness: 0.6 }); body.position.y = 0; g.add(body);
+  const nose = box(1.1, 0.8, 0.9, 0x9fb4c4, { roughness: 0.2 }); nose.position.set(0, 0.05, 2.0); g.add(nose);
+  const tail = box(0.35, 0.35, 2.6, 0x3c4630, {}); tail.position.set(0, 0.2, -2.8); g.add(tail);
+  const fin = box(0.12, 0.9, 0.6, 0x333c22, {}); fin.position.set(0, 0.7, -3.8); g.add(fin);
+  for (const x of [-0.7, 0.7]) { const skid = box(0.12, 0.12, 2.6, 0x22261c, {}); skid.position.set(x, -0.85, 0); g.add(skid); }
+  const mast = box(0.18, 0.4, 0.18, 0x22261c, {}); mast.position.y = 0.75; g.add(mast);
+  const rotor = new THREE.Group(); rotor.position.y = 0.95; g.add(rotor);
+  for (let i = 0; i < 4; i++) {
+    const blade = box(0.16, 0.05, 6.4, 0x1a1d22, { cast: false });
+    blade.rotation.y = (i / 4) * Math.PI * 2; rotor.add(blade);
+  }
+  const tailRotor = new THREE.Group(); tailRotor.position.set(0.25, 0.4, -3.8); g.add(tailRotor);
+  for (let i = 0; i < 2; i++) { const b = box(0.08, 1.4, 0.05, 0x1a1d22, { cast: false }); b.rotation.z = i * Math.PI / 2; tailRotor.add(b); }
+  const spot = box(0.3, 0.2, 0.2, 0xfff0c0, { emissive: 0xffe9a8, emissiveIntensity: 4, cast: false });
+  spot.position.set(0, -0.6, 1.7); g.add(spot);
+  g.userData.rotor = rotor; g.userData.tailRotor = tailRotor;
+  return g;
+}
+
+// ---------------------------------------------------------------- borders
+
+// Quarantine perimeter: concrete barrier with hazard stripes and warning lamps.
+export function makeBorderWall(len, horizontal, inward) {
+  const g = new THREE.Group();
+  const w = horizontal ? len : 1.4;
+  const d = horizontal ? 1.4 : len;
+  // light concrete so the barrier still reads as a structure under night lighting
+  const base = box(w, 3.0, d, 0x6b7480, { receive: true }); base.position.y = 1.5; g.add(base);
+  const cap = box(w + 0.2, 0.3, d + 0.2, 0x8a939e, {}); cap.position.y = 3.15; g.add(cap);
+  const skirt = box(w + 0.5, 0.4, d + 0.5, 0x4d545e, {}); skirt.position.y = 0.2; g.add(skirt);
+
+  const face = (d / 2 + 0.05) * (inward ? 1 : -1);
+  const n = Math.max(2, Math.floor(len / 2.6));
+  for (let i = 0; i < n; i++) {
+    const t = (i + 0.5) / n - 0.5;
+    // alternating hazard chevrons on the inward face
+    const s = box(horizontal ? 1.0 : 0.08, 0.9, horizontal ? 0.08 : 1.0, i % 2 ? 0xffc23a : 0x24272e,
+      { emissive: i % 2 ? 0xffa000 : 0x000000, emissiveIntensity: i % 2 ? 1.6 : 0, cast: false });
+    s.position.set(
+      horizontal ? t * len : (horizontal ? 0 : face),
+      1.4,
+      horizontal ? face : t * len
+    );
+    g.add(s);
+    // warning lamps along the cap
+    if (i % 4 === 0) {
+      const lamp = box(0.22, 0.22, 0.22, 0xff5a3a, { emissive: 0xff3a20, emissiveIntensity: 3, cast: false });
+      lamp.position.set(horizontal ? t * len : 0, 3.45, horizontal ? 0 : t * len);
+      g.add(lamp);
+      const pl = new THREE.PointLight(0xff5a3a, 3, 8, 2);
+      pl.position.copy(lamp.position); g.add(pl);
+    }
+  }
+  return g;
+}
+
