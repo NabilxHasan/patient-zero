@@ -131,7 +131,6 @@ const MOUSE_SENS = 0.0011;
 const PITCH_MIN = -0.55, PITCH_MAX = 1.15;
 let invertY = false;
 let pointerLocked = false;
-const crosshair = document.getElementById('crosshair');
 const lockHint = document.getElementById('lockHint');
 
 function requestLock() {
@@ -147,7 +146,6 @@ function requestLock() {
 }
 document.addEventListener('pointerlockchange', () => {
   pointerLocked = document.pointerLockElement === renderer.domElement;
-  crosshair.classList.toggle('on', pointerLocked);
   lockHint.classList.toggle('hidden2', pointerLocked || !game);
   // Escape releases the lock natively — treat that as opening the pause menu.
   if (!pointerLocked && game && !game.over && !transitioning && !paused) pause(true);
