@@ -187,6 +187,14 @@ function clearScene() {
     if (c === moon || c === moonTarget || c === playerLight || c === blastLight || c === hemi || c === amb) continue;
     scene.remove(c);
   }
+  // restore the night look in case we're leaving the apocalypse
+  if (apocalypse) {
+    apocalypse = false;
+    scene.background = new THREE.Color(0x090d15);
+    scene.fog = new THREE.Fog(0x090d15, 26, 62);
+    hemi.color.setHex(0x9aabcc); hemi.groundColor.setHex(0x27303f);
+    moon.color.setHex(0xbcd0ff);
+  }
   game = null;
 }
 function restart() { transitioning = true; startGame(game.levelIndex); }
@@ -272,6 +280,7 @@ function drainMessages() {
     else if (m.type === 'blast') { blastLight.position.set(m.x, 2.5, m.z); blastLight.intensity = 90; }
     else if (m.type === 'cleared') saveProgress(m.index + 1);      // checkpoint per district
     else if (m.type === 'district') { /* entered a new district */ }
+    else if (m.type === 'act2') enterApocalypse();
     else if (m.type === 'end') { transitioning = true; setTimeout(() => showEnd(m), 1400); }
   }
 }
@@ -420,16 +429,39 @@ function showMenu() {
   }
 }
 
+// The reverse kickoff: the sky burns, the world turns to a hellscape, and a
+// short narrated cutscene plays over the top while gameplay inverts underneath.
+let apocalypse = false;
+function enterApocalypse() {
+  apocalypse = true;
+  scene.background = new THREE.Color(0x1a0604);
+  scene.fog = new THREE.Fog(0x2a0a06, 20, 70);
+  hemi.color.setHex(0xff8a5a); hemi.groundColor.setHex(0x3a1008);
+  moon.color.setHex(0xff6a3a);
+  const cut = document.createElement('div');
+  cut.className = 'screen';
+  cut.style.background = 'rgba(20,4,2,0.6)';
+  cut.innerHTML = `<h1 class="bad" style="color:#ff7a4a;text-shadow:0 0 30px #7a1a0a">THE WORLD BREAKS</h1>
+    <div class="sub" style="color:#ffb497">The ground splits. The sky burns. Everything you turned has gone feral.<br>
+    A cyclone hurls you into a field lab — and a child's hand finds you in the dark.<br><br>
+    <b style="color:#9fd4ff">You are cured. Now save what's left.</b><br>
+    Touch the feral to heal them. Dash and strike to cure crowds. 1 = cure-vapor.<br>
+    Reach zero infected. Reverse the kickoff.</div>`;
+  document.body.appendChild(cut);
+  setTimeout(() => { cut.style.transition = 'opacity 1s'; cut.style.opacity = '0'; setTimeout(() => cut.remove(), 1000); }, 5200);
+}
+
 function showEnd(m) {
-  const final = m.win && m.level === LEVELS.length - 1;
+  const final = m.act2 || (m.win && m.level === LEVELS.length - 1);
   if (m.win) saveProgress(m.level + 1);   // checkpoint
   const name = loadUser();
   const score = m.infected * 10 + (m.kills || 0) * 5 + (m.win ? 500 : 0) + (m.win ? Math.max(0, 300 - m.seconds) : 0);
   addScore({ name, score, district: m.level + 1, seconds: m.seconds, infected: m.infected, win: m.win });
 
   let title, sub;
-  if (final) { title = 'THE OUTBREAK HAS BEGUN'; sub = 'Three districts have fallen. What you kicked off can no longer be stopped.'; }
-  else if (m.win) { title = 'DISTRICT FALLEN'; sub = 'The infection spreads to the next district.'; }
+  if (m.act2 && m.win) { title = 'HUMANITY SAVED'; sub = `You reversed the kickoff. ${m.cured || 0} souls pulled back from the dark, and the world begins again.`; }
+  else if (m.act2) { title = 'THE CURE FADES'; sub = 'You fell before the last of them turned back. The apocalypse claims the rest.'; }
+  else if (m.win) { title = 'THE OUTBREAK HAS BEGUN'; sub = 'Three districts have fallen. But something is coming apart at the seams…'; }
   else { title = 'PATIENT ZERO CONTAINED'; sub = 'The outbreak died with you. The city never learns how close it came.'; }
   const grade = m.seconds < 90 ? 'S' : m.seconds < 150 ? 'A' : m.seconds < 240 ? 'B' : 'C';
   const mm = String(Math.floor(m.seconds / 60)).padStart(2, '0'), ss = String(m.seconds % 60).padStart(2, '0');

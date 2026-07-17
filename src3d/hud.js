@@ -90,8 +90,15 @@ export class HUD {
     if (!gs) return;
     const pct = Math.max(0, Math.min(1, gs.outbreak));
     this.meterFill.style.width = (pct * 100) + '%';
-    this.meterFill.style.background = pct < 0.5 ? '#49ff8c' : (pct < 0.85 ? '#d8c877' : '#ff5b5b');
-    this.meterPct.textContent = Math.round(pct * 100) + '% OVERRUN';
+    if (gs.act2) {
+      // in Act 2 the meter fills with CURED, blue, counting up
+      this.meterFill.style.background = '#6ac8ff';
+      this.meterPct.style.color = '#9fd4ff';
+      this.meterPct.textContent = Math.round(pct * 100) + '% CURED';
+    } else {
+      this.meterFill.style.background = pct < 0.5 ? '#49ff8c' : (pct < 0.85 ? '#d8c877' : '#ff5b5b');
+      this.meterPct.textContent = Math.round(pct * 100) + '% OVERRUN';
+    }
 
     if (this._pipCount !== gs.player.maxHp) {
       this.pips.innerHTML = '';
@@ -102,10 +109,15 @@ export class HUD {
     for (let i = 0; i < kids.length; i++) kids[i].classList.toggle('on', i < gs.player.hp);
     this.lunge.style.width = ((1 - (gs.lungeCooldown || 0)) * 100) + '%';
 
-    const medics = gs.healers ? gs.healers.length : 0;
-    this.stats.textContent =
-      `HORDE ${gs.zombies.length}   ·   RESPONDERS ${gs.cops.length}   ·   SURVIVORS ${Math.max(0, gs.aliveCivs)}` +
-      (medics ? `   ·   ⚕ MEDICS ${medics}` : '');
+    if (gs.act2) {
+      this.stats.textContent =
+        `FERAL ${gs.zombies.length}   ·   CURED ${gs.cured || 0}   ·   ALLIES ${gs.companions ? gs.companions.length : 0}`;
+    } else {
+      const medics = gs.healers ? gs.healers.length : 0;
+      this.stats.textContent =
+        `HORDE ${gs.zombies.length}   ·   RESPONDERS ${gs.cops.length}   ·   SURVIVORS ${Math.max(0, gs.aliveCivs)}` +
+        (medics ? `   ·   ⚕ MEDICS ${medics}` : '');
+    }
 
     if (gs.powers) {
       for (const [type, s] of Object.entries(this.slots)) {

@@ -238,20 +238,22 @@ export function makeCharacter(kind, palette, variant) {
     }
     parts.muzzle = new THREE.Object3D(); parts.muzzle.position.set(0, 1.15, mil ? 0.9 : 0.6); g.add(parts.muzzle);
 
-  } else if (kind === 'player') {
+  } else if (kind === 'player' || kind === 'hero') {
     scale = 1.15;
     // Deliberately NOT emissive — a glowing torso reads as a lit box, not a
     // character. The glow comes from the eyes, the ground pool and the light.
-    const skin = 0x2f7a4c, cloth = 0x1d4630;
-    g.add(box(0.72, 0.8, 0.46, cloth, { cast: true }).translateY(1.0));           // ragged torso
-    g.add(box(0.5, 0.3, 0.06, 0x143523, { cast: false }).translateY(1.06).translateZ(0.24)); // torn shirt
+    const hero = kind === 'hero';
+    const skin = hero ? 0xdfe8f2 : 0x2f7a4c, cloth = hero ? 0x9fd4ff : 0x1d4630;
+    g.add(box(0.72, 0.8, 0.46, cloth, { cast: true }).translateY(1.0));           // torso
+    g.add(box(0.5, 0.3, 0.06, hero ? 0xe03a3a : 0x143523, { emissive: hero ? 0xe03a3a : 0, emissiveIntensity: hero ? 1.2 : 0, cast: false }).translateY(1.06).translateZ(0.24)); // torn shirt / red cross
+    if (hero) g.add(box(0.16, 0.3, 0.06, 0xe03a3a, { emissive: 0xe03a3a, emissiveIntensity: 1.2, cast: false }).translateY(1.06).translateZ(0.25));
     const head = box(0.46, 0.44, 0.46, skin, { cast: true }); head.position.y = 1.62; g.add(head);
-    g.add(faceDecal('player', 0.42, 1.62, 0.235));
-    parts.legL = limb(-0.18, 0.65, 0, 0.26, 0.65, 0.28, 0x1a3d29);
-    parts.legR = limb(0.18, 0.65, 0, 0.26, 0.65, 0.28, 0x1a3d29);
+    g.add(faceDecal(hero ? 'civ' : 'player', 0.42, 1.62, 0.235));
+    parts.legL = limb(-0.18, 0.65, 0, 0.26, 0.65, 0.28, hero ? 0x6a9ac4 : 0x1a3d29);
+    parts.legR = limb(0.18, 0.65, 0, 0.26, 0.65, 0.28, hero ? 0x6a9ac4 : 0x1a3d29);
     parts.armL = limb(-0.44, 1.32, 0, 0.2, 0.6, 0.22, skin);
     parts.armR = limb(0.44, 1.32, 0, 0.2, 0.6, 0.22, skin);
-    parts.armL.rotation.x = -0.9; parts.armR.rotation.x = -0.9;   // clawed, reaching
+    parts.armL.rotation.x = -0.9; parts.armR.rotation.x = -0.9;   // reaching
     g.add(parts.legL); g.add(parts.legR); g.add(parts.armL); g.add(parts.armR);
   }
 
@@ -715,6 +717,67 @@ export function makeHoverCar(color) {
   }
   g.add(box(1.3, 0.08, 0.1, 0x00e5ff, { emissive: 0x00e5ff, emissiveIntensity: 3 }).translateY(0.9).translateZ(1.82));
   const glow = groundGlow(0x00e5ff, 5, 0.3); glow.position.y = 0.05; g.add(glow);
+  return g;
+}
+
+// ---------------------------------------------------------------- apocalypse
+
+// Glowing fissure that opens in the ground and spits lava light.
+export function makeLavaCrack(r) {
+  const g = new THREE.Group();
+  const crack = new THREE.Mesh(
+    new THREE.CircleGeometry(r, 12),
+    new THREE.MeshStandardMaterial({ color: 0xff5a1e, emissive: 0xff3a10, emissiveIntensity: 2.6, roughness: 0.6 })
+  );
+  crack.rotation.x = -Math.PI / 2; crack.position.y = 0.04; g.add(crack);
+  const core = new THREE.Mesh(
+    new THREE.CircleGeometry(r * 0.6, 10),
+    new THREE.MeshBasicMaterial({ color: 0xffd23a })
+  );
+  core.rotation.x = -Math.PI / 2; core.position.y = 0.06; g.add(core);
+  const glow = groundGlow(0xff5a1e, r * 3, 0.5); glow.position.y = 0.08; g.add(glow);
+  g.userData.crack = crack; g.userData.core = core;
+  return g;
+}
+
+// Debris-flinging tornado.
+export function makeCyclone(h) {
+  const g = new THREE.Group();
+  for (let i = 0; i < 5; i++) {
+    const y = i / 5;
+    const rad = 0.6 + y * 3.2;
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(rad, 0.28, 6, 16),
+      new THREE.MeshStandardMaterial({ color: 0x6b7280, emissive: 0x2a2f38, emissiveIntensity: 0.5, transparent: true, opacity: 0.55, roughness: 1 })
+    );
+    ring.rotation.x = Math.PI / 2; ring.position.y = 0.4 + y * h;
+    g.add(ring);
+  }
+  g.userData.rings = g.children.slice();
+  const glow = groundGlow(0x9aa3ae, 8, 0.3); glow.position.y = 0.05; g.add(glow);
+  return g;
+}
+
+// The baby healer — small, luminous, hope in the dark.
+export function makeBabyHealer() {
+  const g = new THREE.Group();
+  const parts = {};
+  const glow = 0xbfe6ff;
+  g.add(box(0.4, 0.44, 0.3, 0xeaf4ff, { emissive: 0x6ac8ff, emissiveIntensity: 0.5, cast: true }).translateY(0.55));
+  g.add(box(0.16, 0.1, 0.05, 0xe03a3a, { emissive: 0xe03a3a, emissiveIntensity: 1.4 }).translateY(0.6).translateZ(0.16)); // cross
+  g.add(box(0.06, 0.16, 0.05, 0xe03a3a, { emissive: 0xe03a3a, emissiveIntensity: 1.4 }).translateY(0.6).translateZ(0.16));
+  const head = box(0.34, 0.32, 0.34, 0xf2d9b8, { cast: true }); head.position.y = 0.92; g.add(head);
+  g.add(faceDecal('civ', 0.3, 0.9, 0.175));
+  const halo = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.03, 6, 14), mat(glow, glow, 3));
+  halo.rotation.x = Math.PI / 2; halo.position.y = 1.16; g.add(halo);
+  parts.legL = limb(-0.1, 0.34, 0, 0.13, 0.34, 0.14, 0xdfe8f2);
+  parts.legR = limb(0.1, 0.34, 0, 0.13, 0.34, 0.14, 0xdfe8f2);
+  parts.armL = limb(-0.24, 0.72, 0, 0.1, 0.3, 0.11, 0xeaf4ff);
+  parts.armR = limb(0.24, 0.72, 0, 0.1, 0.3, 0.11, 0xeaf4ff);
+  Object.values(parts).forEach(l => g.add(l));
+  const pool = groundGlow(0x6ac8ff, 4, 0.4); pool.position.y = 0.04; g.add(pool);
+  g.userData.parts = parts; g.userData.kind = 'civ'; g.userData.halo = halo;
+  g.userData.stepPhase = Math.random() * Math.PI * 2;
   return g;
 }
 

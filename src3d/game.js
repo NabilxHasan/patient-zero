@@ -7,6 +7,7 @@ import {
   makeBarrel, makeHealthKit, makePoliceCar, makeTank, makeHelicopter,
   makePowerPickup, makeGasCloud, makeShockRing, makeHealer, makeHealBeam, POWERS,
   makeAnimal, makeFarmTool,
+  makeLavaCrack, makeCyclone, makeBabyHealer,
 } from './models.js';
 import { LEVELS, HEADLINES, COP_TYPES, VEHICLES, HEALER } from './levels.js';
 
@@ -62,6 +63,10 @@ export class Game {
     this.nextRegenAt = 9;
     this.player.y = 0; this.player.vy = 0; this.player.airborne = false;
     this.hulkUntil = 0;
+    // Act 2 state
+    this.act2 = false; this.hero = false;
+    this.lavas = []; this.cyclones = []; this.companions = [];
+    this.quakeUntil = 0; this.nextHazard = 6; this.cured = 0; this.act2Total = 1; this.everFeral = false;
     this.dir = new THREE.Vector2(0, 1);
 
     // soft ground glow (replaces the hard-edged disc that read as an artifact)
@@ -183,12 +188,13 @@ export class Game {
     if (type === 'gas') {
       const radius = 7;
       const mesh = makeGasCloud(radius);
+      if (this.act2) { mesh.userData.shell.material.color.setHex(0x6ac8ff); mesh.userData.core.material.color.setHex(0xbfe6ff); }
       mesh.position.set(p.x, 0, p.z);
       this.scene.add(mesh);
-      this.gasClouds.push({ mesh, x: p.x, z: p.z, r: radius, life: 12, t: 0 });
-      this.parts.burst(p.x, 1, p.z, 0x7CFF4A, 26);
+      this.gasClouds.push({ mesh, x: p.x, z: p.z, r: radius, life: 12, t: 0, heal: this.act2 });
+      this.parts.burst(p.x, 1, p.z, this.act2 ? 0x6ac8ff : 0x7CFF4A, 26);
       AudioFX.infect();
-      this.msgs.push({ type: 'stinger', text: 'BIO-CANISTER RELEASED' });
+      this.msgs.push({ type: 'stinger', text: this.act2 ? 'CURE-VAPOR RELEASED' : 'BIO-CANISTER RELEASED' });
 
     } else if (type === 'stun') {
       const radius = 14, dur = 5;
@@ -230,11 +236,13 @@ export class Game {
     return true;
   }
 
-  // Left-click swipe: infects whoever is in front of you, or mauls a responder.
+  // Left-click swipe. Act 1: infects/mauls. Act 2: a healing sweep that cures
+  // ferals in an arc — the transformed form cures a whole crowd at once.
   strike() {
     if (this.over || this.time < (this.nextStrike || 0)) return;
     const hulk = this.time < this.hulkUntil;
     this.nextStrike = this.time + (hulk ? 0.25 : 0.4);
+    this.strikeUntil = this.time + 0.18;         // brief cure window for contact
     const p = this.player;
     const reach = hulk ? 3.2 : 1.9;
     const fx = this.dir.x, fz = this.dir.y;
@@ -244,6 +252,14 @@ export class Game {
       if (d > reach) return false;
       return (dx / d) * fx + (dz / d) * fz > 0.25;   // roughly in front
     };
+
+    if (this.act2) {
+      this.parts.burst(p.x + fx * 1.2, 1.2, p.z + fz * 1.2, 0x6ac8ff, hulk ? 16 : 8);
+      AudioFX.click();
+      for (const z of this.zombies.slice()) if (inArc(z)) { this.cureZombie(z); if (!hulk) break; }
+      return;
+    }
+
     this.parts.burst(p.x + fx * 1.2, 1.1, p.z + fz * 1.2, hulk ? 0x6ad24a : 0x53ff7a, hulk ? 12 : 6);
     AudioFX.lunge();
     let hit = false;
@@ -256,6 +272,136 @@ export class Game {
     for (const b of this.barrels) if (!b.dead && Math.hypot(b.x - p.x, b.z - p.z) < reach + 0.4) this.popBarrel(b);
     if (hulk) this.smashAround(p.x + fx * 1.5, p.z + fz * 1.5, reach);
     if (hit) this.msgs.push({ type: 'shake', amt: hulk ? 0.35 : 0.15 });
+  }
+
+  // ========================================================================
+  // ACT 2 — the reverse kickoff. A cyclone throws patient zero into a field
+  // lab; the baby healer's touch turns them. Now the cure spreads instead of
+  // the plague, the world is coming apart, and every infected has gone feral.
+  // ========================================================================
+  becomeHero() {
+    if (this.act2) return;
+    this.act2 = true; this.hero = true;
+    this.over = false; this.won = false;
+    const p = this.player;
+    this.scene.remove(p.mesh);
+    p.mesh = makeCharacter('hero');
+    p.mesh.position.set(p.x, 0, p.z);
+    this.scene.add(p.mesh);
+    p.hp = p.maxHp = 8;
+    this.aura.material.color.setHex(0x6ac8ff);
+    this.powers = { gas: 2, stun: 1, horde: 1, rage: 1, hulk: 1 };
+    this.hulkUntil = 0; this.rageUntil = 0;
+    for (const g of this.world.gates) this.world.openGate(g);
+    this.spawnCompanion(p.x + 1.5, p.z, true);
+    for (const h of this.healers) h.ally = true;
+    for (const z of this.zombies) z.feral = true;
+    // Civilians mid-turn at the transition still become ferals, so count them.
+    this.act2Total = this.zombies.length + this.civs.filter(c => c.turning).length;
+    this.everFeral = false;
+    this.nextHazard = 4;
+    this.msgs.push({ type: 'act2' });
+    this.msgs.push({ type: 'stinger', text: 'YOU ARE THE CURE' });
+    AudioFX.win();
+  }
+
+  spawnCompanion(x, z, baby) {
+    const mesh = baby ? makeBabyHealer() : makeHealer();
+    mesh.position.set(x, 0, z);
+    this.scene.add(mesh);
+    const c = { mesh, x, z, vx: 0, vz: 0, kind: 'civ', baby: !!baby, wander: null, stunUntil: 0, curedTimer: 0 };
+    this.companions.push(c);
+    return c;
+  }
+
+  // Cure a feral back into a civilian — Act 2's inverse of infect().
+  cureZombie(z) {
+    if (!this.zombies.includes(z)) return;
+    const { x, z: zz } = z;
+    this.remove(z, this.zombies);
+    this.parts.burst(x, 1.2, zz, 0x6ac8ff, 16);
+    const c = this.spawnCiv(x, zz);
+    c.state = 'calm'; c.cured = true;
+    AudioFX.turn();
+    this.cured++;
+  }
+
+  spawnLava(x, z) {
+    const r = 2.5 + Math.random() * 2;
+    const mesh = makeLavaCrack(r); mesh.position.set(x, 0, z);
+    this.scene.add(mesh);
+    this.lavas.push({ mesh, x, z, r, life: 9 + Math.random() * 5, t: 0 });
+    this.msgs.push({ type: 'shake', amt: 0.5 });
+  }
+  spawnCyclone(x, z) {
+    const mesh = makeCyclone(4); mesh.position.set(x, 0, z);
+    this.scene.add(mesh);
+    const ang = Math.random() * Math.PI * 2;
+    this.cyclones.push({ mesh, x, z, vx: Math.cos(ang) * 5, vz: Math.sin(ang) * 5, life: 8, t: 0 });
+    AudioFX.stinger();
+  }
+  triggerQuake() {
+    this.quakeUntil = this.time + 3;
+    this.msgs.push({ type: 'stinger', text: 'EARTHQUAKE' });
+    const p = this.player;
+    for (let i = 0; i < 4; i++) this.spawnLava(p.x + (Math.random() - 0.5) * 30, p.z + (Math.random() - 0.5) * 30);
+  }
+
+  updateHazards(dt) {
+    if (!this.act2) return;
+    const p = this.player;
+    this.nextHazard -= dt;
+    if (this.nextHazard <= 0) {
+      this.nextHazard = 7 + Math.random() * 6;
+      const roll = Math.random();
+      if (roll < 0.4) this.spawnLava(p.x + (Math.random() - 0.5) * 40, p.z + (Math.random() - 0.5) * 30);
+      else if (roll < 0.75) this.spawnCyclone(p.x + (Math.random() - 0.5) * 30, p.z + (Math.random() - 0.5) * 24);
+      else this.triggerQuake();
+    }
+    if (this.time < this.quakeUntil) this.msgs.push({ type: 'shake', amt: 0.35 });
+
+    for (let i = this.lavas.length - 1; i >= 0; i--) {
+      const l = this.lavas[i]; l.life -= dt; l.t += dt;
+      const s = Math.min(1, l.t * 2) * (l.life < 2 ? l.life / 2 : 1);
+      l.mesh.scale.set(s, 1, s);
+      l.mesh.userData.core.material.color.setHex(Math.sin(l.t * 8) > 0 ? 0xffd23a : 0xff7a2a);
+      if (l.life <= 0) { this.scene.remove(l.mesh); this.lavas.splice(i, 1); continue; }
+      if (Math.hypot(p.x - l.x, p.z - l.z) < l.r && (p.y || 0) < 0.5 && this.time > this.invulnUntil) this.hurtPlayer(1);
+      for (const z of this.zombies.slice()) if (Math.hypot(z.x - l.x, z.z - l.z) < l.r) { z.hp -= dt * 3; if (z.hp <= 0) { this.remove(z, this.zombies); this.parts.burst(z.x, 1, z.z, 0xff5a1e, 5); } }
+    }
+    for (let i = this.cyclones.length - 1; i >= 0; i--) {
+      const c = this.cyclones[i]; c.life -= dt; c.t += dt;
+      c.x += c.vx * dt; c.z += c.vz * dt;
+      const r = this.world.collide(c.x, c.z, 2); c.x = r.x; c.z = r.z;
+      c.mesh.position.set(c.x, 0, c.z);
+      c.mesh.rotation.y += dt * 6;
+      for (const ring of c.mesh.userData.rings) ring.rotation.z += dt * 8;
+      if (c.life <= 0) { this.scene.remove(c.mesh); this.cyclones.splice(i, 1); continue; }
+      const push = (e, str) => { const d = Math.hypot(e.x - c.x, e.z - c.z); if (d < 7 && d > 0.1) { const a = Math.atan2(e.z - c.z, e.x - c.x) + 1.4; const f = (1 - d / 7) * str; e.vx = (e.vx || 0) + Math.cos(a) * f; e.vz = (e.vz || 0) + Math.sin(a) * f; } };
+      for (const z of this.zombies) push(z, dt * 660);
+      for (const pr of this.city.props) push(pr, dt * 600);
+      if (Math.hypot(p.x - c.x, p.z - c.z) < 6) { const a = Math.atan2(p.z - c.z, p.x - c.x) + 1.4; p.vx += Math.cos(a) * 14; p.vz += Math.sin(a) * 14; this.msgs.push({ type: 'shake', amt: 0.4 }); }
+    }
+  }
+
+  updateCompanions(dt) {
+    const p = this.player;
+    for (const c of this.companions) {
+      const d = this.dist(p, c);
+      if (d > 2.5) { const a = Math.atan2(p.x - c.x, p.z - c.z); const spd = c.baby ? 6.5 : 4; c.vx = Math.sin(a) * spd; c.vz = Math.cos(a) * spd; }
+      else { c.vx = c.vz = 0; }
+      const r = this.world.collide(c.x + c.vx * dt, c.z + c.vz * dt, 0.35); c.x = r.x; c.z = r.z;
+      c.mesh.position.set(c.x, 0, c.z);
+      if (Math.hypot(c.vx, c.vz) > 0.4) c.mesh.rotation.y = Math.atan2(c.vx, c.vz);
+      animateWalk(c.mesh, Math.hypot(c.vx, c.vz), dt, Math.hypot(c.vx, c.vz) > 0.4);
+      if (c.mesh.userData.halo) c.mesh.userData.halo.rotation.z += dt;
+      c.curedTimer -= dt;
+      if (c.curedTimer <= 0) {
+        c.curedTimer = 0.6;
+        const z = this.nearest(this.zombies, c.x, c.z, c.baby ? 4 : 3);
+        if (z) this.cureZombie(z);
+      }
+    }
   }
 
   // Landing shockwave while transformed.
@@ -335,6 +481,14 @@ export class Game {
       z2.hp = 4;
     }
     return z2;
+  }
+
+  // Ferals gnaw on the hero in Act 2 — a real threat now that you can't infect
+  // your way out. Contact drains health on a cooldown.
+  feralBite(z) {
+    if (this.time < (z.lastGnaw || 0) + 0.8) return;
+    z.lastGnaw = this.time;
+    if (this.time > this.invulnUntil && this.time >= this.hulkUntil) this.hurtPlayer(1);
   }
 
   bite(cop, dmg) {
@@ -509,11 +663,25 @@ export class Game {
     this.updateProps(dt);
     this.updateDebris(dt);
 
-    // infection contacts
-    for (const c of this.civs) {
-      if (c.turning) continue;
-      if (this.dist(this.player, c) < INFECT_DIST) { this.infect(c, true); continue; }
-      for (const z of this.zombies) if (this.dist(z, c) < INFECT_DIST) { this.infect(c, false); break; }
+    if (this.act2) {
+      // ACT 2: your touch cures — but only when you mean to (dash or strike).
+      // Otherwise a feral in contact gnaws you, so you can't just faceroll.
+      const curing = this.time < this.lungeUntil || this.time < (this.strikeUntil || 0);
+      for (const z of this.zombies.slice()) {
+        const d = this.dist(this.player, z);
+        if (d < INFECT_DIST + 0.4) { if (curing || this.time < this.hulkUntil) this.cureZombie(z); else this.feralBite(z); }
+      }
+      for (const c of this.civs) {
+        if (c.turning || c.cured) continue;
+        for (const z of this.zombies) if (this.dist(z, c) < INFECT_DIST) { this.infect(c, false); break; }
+      }
+    } else {
+      // ACT 1: your touch spreads it.
+      for (const c of this.civs) {
+        if (c.turning) continue;
+        if (this.dist(this.player, c) < INFECT_DIST) { this.infect(c, true); continue; }
+        for (const z of this.zombies) if (this.dist(z, c) < INFECT_DIST) { this.infect(c, false); break; }
+      }
     }
     // bites — a dash is a takedown, a walk-up mauling is not
     const dashing = this.time < this.lungeUntil;
@@ -552,13 +720,32 @@ export class Game {
     this.updateBarrels();
     this.updateBullets(dt);
     this.updateShells(dt);
+    this.updateHazards(dt);
+    this.updateCompanions(dt);
     this.updateWaves();
     this.parts.update(dt);
-    AudioFX.heartbeat(this.outbreak);
+    AudioFX.heartbeat(this.act2 ? (this.zombies.length ? 0.6 : 0.1) : this.outbreak);
 
-    // Win needs civilians cleared and every *ground* responder down. Helicopters
-    // are excluded on purpose — they leave on a timer and must never softlock it.
-    if (this.dStats.every(d => d.cleared)) this.endLevel(true);
+    if (this.act2) {
+      // Total = everyone who needed curing (already cured + still feral), tracked
+      // as a running max so civilians finishing their turn keep raising it.
+      this.act2Total = Math.max(this.act2Total, this.cured + this.zombies.length);
+      if (this.zombies.length > 0) this.everFeral = true;
+      this.outbreak = this.act2Total ? this.cured / this.act2Total : 0;   // % CURED, counts up
+      // Win only once ferals have actually appeared and then all been cured.
+      if (this.zombies.length === 0 && this.everFeral) this.endAct2();
+    } else if (this.dStats.every(d => d.cleared)) {
+      // ACT 1 done: don't end — invert into Act 2 (the reverse kickoff).
+      this.becomeHero();
+    }
+  }
+
+  endAct2() {
+    if (this.over) return;
+    this.over = true; this.won = true;
+    this.msgs.push({ type: 'stinger', text: 'HUMANITY SAVED' });
+    AudioFX.win();
+    this.msgs.push({ type: 'end', win: true, act2: true, level: 2, seconds: Math.round(this.elapsed), infected: this.infectedCount, kills: this.kills, cured: this.cured });
   }
 
   updatePlayer(dt, input) {
@@ -923,21 +1110,30 @@ export class Game {
       const fade = Math.min(1, c.life / 3);
       c.mesh.userData.shell.material.opacity = 0.16 * fade;
       c.mesh.userData.core.material.opacity = 0.12 * fade;
-      if (Math.random() < 0.25) this.parts.burst(c.x + (Math.random() - 0.5) * c.r, 0.6, c.z + (Math.random() - 0.5) * c.r, 0x7CFF4A, 1);
+      if (Math.random() < 0.25) this.parts.burst(c.x + (Math.random() - 0.5) * c.r, 0.6, c.z + (Math.random() - 0.5) * c.r, c.heal ? 0x6ac8ff : 0x7CFF4A, 1);
 
-      // anything that breathes it turns
-      for (const civ of this.civs) {
-        if (civ.turning) continue;
-        if (Math.hypot(civ.x - c.x, civ.z - c.z) < c.r) {
-          civ.gas = (civ.gas || 0) + dt;
-          if (civ.gas > 0.9) this.infect(civ, false);
+      if (c.heal) {
+        // ACT 2 cure-vapor: ferals lingering in it are healed
+        for (const z of this.zombies.slice()) {
+          if (Math.hypot(z.x - c.x, z.z - c.z) < c.r) {
+            z.gas = (z.gas || 0) + dt;
+            if (z.gas > 1.1) this.cureZombie(z);
+          }
         }
-      }
-      // responders caught in it go down too
-      for (const cop of this.cops.slice()) {
-        if (Math.hypot(cop.x - c.x, cop.z - c.z) < c.r) {
-          cop.gas = (cop.gas || 0) + dt;
-          if (cop.gas > 2.2) { cop.gas = 0; this.bite(cop, 1); }
+      } else {
+        // anything that breathes it turns
+        for (const civ of this.civs) {
+          if (civ.turning) continue;
+          if (Math.hypot(civ.x - c.x, civ.z - c.z) < c.r) {
+            civ.gas = (civ.gas || 0) + dt;
+            if (civ.gas > 0.9) this.infect(civ, false);
+          }
+        }
+        for (const cop of this.cops.slice()) {
+          if (Math.hypot(cop.x - c.x, cop.z - c.z) < c.r) {
+            cop.gas = (cop.gas || 0) + dt;
+            if (cop.gas > 2.2) { cop.gas = 0; this.bite(cop, 1); }
+          }
         }
       }
     }
@@ -1132,6 +1328,7 @@ export class Game {
       this.msgs.push({ type: 'level', name: d.cfg.name, intro: d.cfg.intro });
       this.msgs.push({ type: 'district', index: d.index });
     }
+    if (this.act2) return;                       // districts already fell; no re-clearing
     // recount this district's survivors
     for (let i = 0; i < this.dStats.length; i++) {
       const st = this.dStats[i];
@@ -1154,6 +1351,7 @@ export class Game {
   }
 
   updateWaves() {
+    if (this.act2) return;                       // no new responders in the apocalypse
     const st = this.dStats[this.districtIdx];
     this.aliveCivs = st.alive; this.initialCivs = st.initial;
     this.outbreak = st.initial ? 1 - st.alive / st.initial : 0;
@@ -1196,9 +1394,9 @@ export class Game {
   endLevel(win) {
     if (this.over) return;
     this.over = true; this.won = win;
-    this.msgs.push({ type: 'stinger', text: win ? 'DISTRICT FALLEN' : 'PATIENT ZERO CONTAINED' });
+    this.msgs.push({ type: 'stinger', text: win ? 'DISTRICT FALLEN' : (this.act2 ? 'THE CURE FADES' : 'PATIENT ZERO CONTAINED') });
     if (win) AudioFX.win(); else AudioFX.lose();
-    this.msgs.push({ type: 'end', win, level: this.levelIndex, seconds: Math.round(this.elapsed), infected: this.infectedCount, kills: this.kills });
+    this.msgs.push({ type: 'end', win, act2: this.act2, level: this.levelIndex, seconds: Math.round(this.elapsed), infected: this.infectedCount, kills: this.kills, cured: this.cured });
   }
 }
 
