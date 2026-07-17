@@ -23,8 +23,9 @@ export const LEVELS = [
     parkChance: 0.34,
     buildingH: [3, 6],          // low suburban houses
     palette: { ground: 0x14171d, fog: 0x090d15, roofs: [0x3a3630, 0x35302c, 0x3c3a34, 0x322c28] },
-    props: 14, barrels: 8, healthKits: 4, trees: true,
+    props: 14, barrels: 8, healthKits: 4, powers: 7, trees: true,
     initial: [],
+    healers: [],
     responders: [
       { pct: 0.25, type: 'police', count: 3 },
       { pct: 0.55, type: 'police', count: 4 },
@@ -45,7 +46,8 @@ export const LEVELS = [
     parkChance: 0.12,
     buildingH: [6, 12],         // downtown towers — capped so they don't block the camera
     palette: { ground: 0x161a22, fog: 0x0a0f1a, roofs: [0x2a2e3c, 0x2c3438, 0x322c38, 0x262b36] },
-    props: 26, barrels: 12, healthKits: 5, trees: true,
+    props: 26, barrels: 12, healthKits: 5, powers: 10, trees: true,
+    healers: [{ pct: 0.35, count: 1 }],
     // Every district opens quiet — the response is always something you kick off.
     initial: [],
     responders: [
@@ -71,7 +73,8 @@ export const LEVELS = [
     parkChance: 0.08,
     buildingH: [4, 9],          // squat military compounds
     palette: { ground: 0x191c18, fog: 0x0d1210, roofs: [0x3a4030, 0x333a2c, 0x2f3628, 0x424835] },
-    props: 20, barrels: 16, healthKits: 6, trees: false,
+    props: 20, barrels: 16, healthKits: 6, powers: 12, trees: false,
+    healers: [{ pct: 0.22, count: 1 }, { pct: 0.55, count: 2 }],
     // The garrison is here, but it still has to notice you first.
     initial: [],
     responders: [
@@ -99,6 +102,13 @@ export const COP_TYPES = {
     speed: 4.3, hp: 5, sight: 16, fireRange: 12,
     fireDelay: 0.38, bulletSpeed: 24, dmg: 1, label: 'MILITARY DEPLOYED',
   },
+};
+
+// Field medic: walks the district curing the infected back into civilians,
+// which drags the outbreak percentage back down. Must be put down.
+export const HEALER = {
+  speed: 3.2, hp: 4, seek: 26, healRange: 3.2, healTime: 2.2, fleeRange: 7,
+  label: 'FIELD MEDIC DISPATCHED',
 };
 
 export const VEHICLES = {

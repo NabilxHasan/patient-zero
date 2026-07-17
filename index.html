@@ -39,6 +39,25 @@
 
     #stats { position: absolute; right: 16px; bottom: 18px; font-size: 13px; color: #9ca3af; }
 
+    #powers {
+      position: absolute; left: 50%; transform: translateX(-50%); bottom: 14px;
+      display: flex; gap: 10px;
+    }
+    #powers .slot {
+      width: 62px; padding: 5px 0 4px; text-align: center;
+      background: rgba(10,14,20,0.75); border: 1px solid #2b323c; border-radius: 4px;
+      opacity: 0.4; transition: opacity 0.15s, border-color 0.15s, transform 0.1s;
+    }
+    #powers .slot.has { opacity: 1; }
+    #powers .slot.fire { transform: scale(1.18); }
+    #powers .k { font-size: 10px; color: #6b7280; }
+    #powers .n { font-size: 15px; font-weight: bold; }
+    #powers .l { font-size: 9px; letter-spacing: 1px; }
+    #rage {
+      position: absolute; left: 50%; transform: translateX(-50%); bottom: 96px;
+      font-size: 13px; color: #FF6A4A; font-weight: bold; opacity: 0; letter-spacing: 2px;
+    }
+
     #stinger {
       position: absolute; left: 0; right: 0; top: 32%; text-align: center;
       font-size: 46px; font-weight: bold; color: #ff5b5b; opacity: 0;
@@ -112,6 +131,8 @@
       <div id="lungeWrap"><div id="lunge"></div></div>
     </div>
     <div id="stats"></div>
+    <div id="powers"></div>
+    <div id="rage">ADRENAL SURGE</div>
     <div id="stinger"></div>
     <div id="intro"><div class="t"></div><div class="s"></div></div>
     <div id="flash"></div>

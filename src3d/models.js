@@ -311,6 +311,110 @@ export function makeHealthKit() {
   return g;
 }
 
+// ---------------------------------------------------------------- powers
+
+export const POWERS = {
+  gas:   { key: '1', color: 0x7CFF4A, label: 'GAS',   name: 'BIO-CANISTER' },
+  stun:  { key: '2', color: 0x4AC8FF, label: 'STUN',  name: 'SHOCK CHARGE' },
+  horde: { key: '3', color: 0xC46AFF, label: 'HORDE', name: 'HIVE CALL' },
+  rage:  { key: '4', color: 0xFF6A4A, label: 'RAGE',  name: 'ADRENAL SURGE' },
+};
+
+export function makePowerPickup(type) {
+  const g = new THREE.Group();
+  const c = POWERS[type].color;
+  if (type === 'gas') {
+    const flask = cyl(0.22, 0.55, 0xd8e6d0, {}); flask.position.y = 0.42; g.add(flask);
+    const fluid = cyl(0.17, 0.36, c, { emissive: c, emissiveIntensity: 2 }); fluid.position.y = 0.36; g.add(fluid);
+    g.add(box(0.16, 0.12, 0.16, 0x3a4048, {}).translateY(0.74));
+  } else if (type === 'stun') {
+    const orb = new THREE.Mesh(new THREE.IcosahedronGeometry(0.28, 0), mat(c, c, 2.4));
+    orb.position.y = 0.5; g.add(orb);
+    g.add(box(0.34, 0.1, 0.34, 0x3a4048, {}).translateY(0.24));
+  } else if (type === 'horde') {
+    const horn = cyl(0.1, 0.5, 0x2b2f38, {}); horn.position.y = 0.45; horn.rotation.z = 0.3; g.add(horn);
+    const bell = new THREE.Mesh(new THREE.ConeGeometry(0.26, 0.4, 8), mat(c, c, 2.2));
+    bell.position.set(0.14, 0.8, 0); bell.rotation.z = 0.3; g.add(bell);
+  } else {
+    const spike = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.7, 6), mat(c, c, 2.2));
+    spike.position.y = 0.5; g.add(spike);
+  }
+  const glow = groundGlow(c, 2.4, 0.35); glow.position.y = 0.03; g.add(glow);
+  g.userData.spinY = 0;
+  return g;
+}
+
+// Lingering contamination cloud — anything that breathes it turns.
+export function makeGasCloud(radius) {
+  const g = new THREE.Group();
+  const shell = new THREE.Mesh(
+    new THREE.SphereGeometry(radius, 14, 10),
+    new THREE.MeshBasicMaterial({
+      color: 0x7CFF4A, transparent: true, opacity: 0.16,
+      depthWrite: false, blending: THREE.AdditiveBlending,
+    })
+  );
+  shell.scale.y = 0.45; shell.position.y = radius * 0.35; g.add(shell);
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(radius * 0.6, 12, 8),
+    new THREE.MeshBasicMaterial({ color: 0xA8FF7A, transparent: true, opacity: 0.12, depthWrite: false, blending: THREE.AdditiveBlending })
+  );
+  core.scale.y = 0.5; core.position.y = radius * 0.3; g.add(core);
+  const pool = groundGlow(0x7CFF4A, radius * 2.4, 0.4); pool.position.y = 0.05; g.add(pool);
+  g.userData.shell = shell; g.userData.core = core;
+  return g;
+}
+
+// Expanding shock ring for the stun charge.
+export function makeShockRing() {
+  const m = new THREE.Mesh(
+    new THREE.RingGeometry(0.6, 1.0, 32),
+    new THREE.MeshBasicMaterial({ color: 0x4AC8FF, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending })
+  );
+  m.rotation.x = -Math.PI / 2;
+  m.position.y = 0.2;
+  return m;
+}
+
+// ---------------------------------------------------------------- healer
+// Field medic: cures the infected back into civilians. Must be put down.
+export function makeHealer() {
+  const g = new THREE.Group();
+  const parts = {};
+  const coat = 0xf2f5f8, trim = 0x2f7fd8;
+  g.add(box(0.64, 0.78, 0.42, coat, { cast: true }).translateY(0.98));
+  g.add(box(0.66, 0.16, 0.44, trim, {}).translateY(1.3));                       // collar
+  // red cross on the chest
+  g.add(box(0.3, 0.1, 0.06, 0xe03a3a, { emissive: 0xe03a3a, emissiveIntensity: 1.6 }).translateY(1.02).translateZ(0.22));
+  g.add(box(0.1, 0.3, 0.06, 0xe03a3a, { emissive: 0xe03a3a, emissiveIntensity: 1.6 }).translateY(1.02).translateZ(0.22));
+  const head = box(0.42, 0.4, 0.42, 0xe8c39a, { cast: true }); head.position.y = 1.58; g.add(head);
+  g.add(faceDecal('civ', 0.38, 1.56, 0.215));
+  g.add(box(0.46, 0.14, 0.46, coat, {}).translateY(1.8));                       // cap
+  g.add(box(0.14, 0.06, 0.14, 0xe03a3a, { emissive: 0xe03a3a, emissiveIntensity: 1.4 }).translateY(1.88));
+  parts.legL = limb(-0.17, 0.62, 0, 0.24, 0.62, 0.26, 0x2b3440);
+  parts.legR = limb(0.17, 0.62, 0, 0.24, 0.62, 0.26, 0x2b3440);
+  parts.armL = limb(-0.4, 1.28, 0, 0.18, 0.55, 0.2, coat);
+  parts.armR = limb(0.4, 1.28, 0, 0.18, 0.55, 0.2, coat);
+  Object.values(parts).forEach(l => g.add(l));
+  // healing lantern so he's findable in a dark street
+  const lamp = box(0.2, 0.2, 0.2, 0xbfe6ff, { emissive: 0x6ac8ff, emissiveIntensity: 3, cast: false });
+  lamp.position.set(0.42, 0.95, 0.2); g.add(lamp);
+  const glow = groundGlow(0x6ac8ff, 5, 0.4); glow.position.y = 0.04; g.add(glow);
+  g.userData.parts = parts;
+  g.userData.kind = 'healer';
+  g.userData.stepPhase = Math.random() * Math.PI * 2;
+  return g;
+}
+
+// Beam drawn from healer to the patient being cured.
+export function makeHealBeam() {
+  const m = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.05, 1, 6),
+    new THREE.MeshBasicMaterial({ color: 0x6ac8ff, transparent: true, opacity: 0.7, depthWrite: false, blending: THREE.AdditiveBlending })
+  );
+  return m;
+}
+
 // Pushable street prop (crate / bin) — knocked around on contact.
 export function makeProp(type) {
   const g = new THREE.Group();

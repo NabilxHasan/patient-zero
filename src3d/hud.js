@@ -1,3 +1,5 @@
+import { POWERS } from './models.js';
+
 // DOM HUD controller — reads the game's message queue and reflects state.
 export class HUD {
   constructor() {
@@ -14,6 +16,27 @@ export class HUD {
     this.flashEl = document.getElementById('flash');
     this.hlTarget = ''; this.hlShown = 0;
     this._pipCount = 0;
+
+    // power slots
+    this.powersEl = document.getElementById('powers');
+    this.rageEl = document.getElementById('rage');
+    this.slots = {};
+    for (const [type, spec] of Object.entries(POWERS)) {
+      const d = document.createElement('div');
+      d.className = 'slot';
+      const hex = '#' + spec.color.toString(16).padStart(6, '0');
+      d.innerHTML = `<div class="k">${spec.key}</div><div class="n" style="color:${hex}">0</div><div class="l" style="color:${hex}">${spec.label}</div>`;
+      this.powersEl.appendChild(d);
+      this.slots[type] = { el: d, num: d.querySelector('.n'), color: hex };
+    }
+  }
+
+  // brief pop when a power fires
+  firePower(type) {
+    const s = this.slots[type];
+    if (!s) return;
+    s.el.classList.add('fire');
+    setTimeout(() => s.el.classList.remove('fire'), 120);
   }
 
   show() { this.root.classList.remove('hidden'); }
@@ -66,6 +89,20 @@ export class HUD {
     const kids = this.pips.children;
     for (let i = 0; i < kids.length; i++) kids[i].classList.toggle('on', i < gs.player.hp);
     this.lunge.style.width = ((1 - (gs.lungeCooldown || 0)) * 100) + '%';
-    this.stats.textContent = `HORDE ${gs.zombies.length}   ·   RESPONDERS ${gs.cops.length}   ·   SURVIVORS ${Math.max(0, gs.aliveCivs)}`;
+
+    const medics = gs.healers ? gs.healers.length : 0;
+    this.stats.textContent =
+      `HORDE ${gs.zombies.length}   ·   RESPONDERS ${gs.cops.length}   ·   SURVIVORS ${Math.max(0, gs.aliveCivs)}` +
+      (medics ? `   ·   ⚕ MEDICS ${medics}` : '');
+
+    if (gs.powers) {
+      for (const [type, s] of Object.entries(this.slots)) {
+        const n = gs.powers[type] || 0;
+        if (s.num.textContent !== String(n)) s.num.textContent = n;
+        s.el.classList.toggle('has', n > 0);
+      }
+    }
+    const raging = gs.rageUntil && gs.time < gs.rageUntil;
+    this.rageEl.style.opacity = raging ? '1' : '0';
   }
 }

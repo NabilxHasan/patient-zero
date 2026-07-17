@@ -64,13 +64,21 @@ addEventListener('resize', () => {
 const keys = { W: false, A: false, S: false, D: false };
 const input = { mx: 0, mz: 0, lunge: false };
 const codeMap = { KeyW: 'W', KeyA: 'A', KeyS: 'S', KeyD: 'D', ArrowUp: 'W', ArrowLeft: 'A', ArrowDown: 'S', ArrowRight: 'D' };
+const POWER_KEYS = { Digit1: 'gas', Digit2: 'stun', Digit3: 'horde', Digit4: 'rage' };
 addEventListener('keydown', e => {
+  // Escape always toggles the pause menu, even while paused.
+  if (e.code === 'Escape') { e.preventDefault(); if (game && !transitioning) { paused ? resume() : pause(true); } return; }
+  // focus-loss pause resumes on any key; the Escape menu only on Escape/buttons
+  if (paused) { if (!pauseIsMenu) resume(); return; }
   if (codeMap[e.code]) keys[codeMap[e.code]] = true;
   if (e.code === 'Space') { input.lunge = true; e.preventDefault(); }
+  if (POWER_KEYS[e.code] && game && !game.over) {
+    const t = POWER_KEYS[e.code];
+    if (game.usePower(t)) hud.firePower(t);
+  }
   if (e.code === 'KeyM') { const m = AudioFX.toggleMute(); hud.setHeadline(m ? '[ AUDIO MUTED ]' : '[ AUDIO ON ]'); }
   if (e.code === 'KeyR' && game && !transitioning) restart();
   if (e.code === 'KeyZ') cycleZoom();
-  if (paused) resume();
 });
 addEventListener('keyup', e => {
   if (codeMap[e.code]) keys[codeMap[e.code]] = false;
@@ -190,13 +198,54 @@ function frame() {
 }
 function schedule() { if (document.hidden) setTimeout(frame, 33); else requestAnimationFrame(frame); }
 
-let paused = false;
+let paused = false, pauseIsMenu = false;
 const pauseEl = document.getElementById('pause');
-function pause() { if (paused || !game) return; paused = true; pauseEl.style.display = 'flex'; }
-function resume() { paused = false; pauseEl.style.display = 'none'; last = performance.now(); if (window.AudioFX) AudioFX.resume(); }
-addEventListener('blur', pause);
-addEventListener('focus', resume);
-pauseEl.addEventListener('pointerdown', resume);
+
+// `menu` = deliberate pause (Escape) with options; otherwise it's a focus-loss
+// pause that resumes on any interaction.
+function pause(menu) {
+  if (paused || !game || transitioning) return;
+  paused = true; pauseIsMenu = !!menu;
+  keys.W = keys.A = keys.S = keys.D = false; input.lunge = false;
+  pauseEl.innerHTML = menu ? `
+    <div>
+      <div style="color:#49ff8c;font-size:46px;font-weight:bold;letter-spacing:3px;text-shadow:0 0 26px #1a7a44">PAUSED</div>
+      <div id="pauseBtns" style="margin-top:18px"></div>
+      <div class="keys" style="margin-top:18px;color:#4b5563;font-size:13px">
+        WASD move · MOUSE look · SPACE dash · 1-4 powers · Z zoom · M mute · ESC resume
+      </div>
+    </div>` : `
+    <div>
+      <div style="color:#49ff8c;font-size:44px;font-weight:bold">PAUSED</div>
+      <div style="color:#9ca3af;margin-top:12px">tab lost focus — click or press any key to resume</div>
+    </div>`;
+  pauseEl.style.display = 'flex';
+
+  if (menu) {
+    const holder = pauseEl.querySelector('#pauseBtns');
+    const add = (label, cb, pulse) => {
+      const b = document.createElement('button');
+      b.className = 'btn' + (pulse ? ' pulse' : '');
+      b.textContent = `[ ${label} ]`;
+      b.onclick = (ev) => { ev.stopPropagation(); AudioFX.click(); cb(); };
+      holder.appendChild(b); holder.appendChild(document.createElement('br'));
+    };
+    add('RESUME', resume, true);
+    add('RESTART DISTRICT', () => { resume(); restart(); });
+    add('MAIN MENU', () => { resume(); clearScene(); hud.hide(); showMenu(); });
+  }
+}
+
+function resume() {
+  paused = false; pauseIsMenu = false;
+  pauseEl.style.display = 'none';
+  last = performance.now();
+  if (window.AudioFX) AudioFX.resume();
+}
+
+addEventListener('blur', () => pause(false));
+addEventListener('focus', () => { if (!pauseIsMenu) resume(); });   // don't nuke a deliberate pause
+pauseEl.addEventListener('pointerdown', () => { if (!pauseIsMenu) resume(); });
 
 // ---- screens ----
 function makeScreen(html) {
@@ -226,13 +275,16 @@ function showMenu() {
     <div class="tag">Every outbreak has a kickoff.</div>
     <div class="sub">You are the first infected. Touch civilians to spread the plague.<br>
     Every victim rises and hunts. The city sends police, armour, then gunships.<br>
-    Dash into red barrels to blow them apart — the blast never touches your kind.</div>
+    <b>DASH</b> is a takedown — it drops a responder outright.<br>
+    Dash into red barrels to blow them apart; the blast never touches your kind.<br>
+    Scavenge powers off the street and fire them with <b>1-4</b>.<br>
+    Later districts send <b style="color:#6ac8ff">field medics</b> who cure your horde — put them down.</div>
     <div style="margin-top:14px">
       <label class="small">CODENAME&nbsp;</label>
       <input id="nameIn" maxlength="14" value="${escapeHTML(user)}" placeholder="patient zero">
     </div>
     <button class="btn pulse" id="startBtn">[ BEGIN THE OUTBREAK ]</button>
-    <div class="keys">WASD move · MOUSE look · SPACE dash · Z zoom · M mute · R restart</div>
+    <div class="keys">WASD move · MOUSE look · SPACE dash · 1-4 powers · ESC pause · Z zoom · M mute · R restart</div>
     <div class="boardWrap">${boardHTML()}</div>`);
   const nameIn = el.querySelector('#nameIn');
   const go = () => {

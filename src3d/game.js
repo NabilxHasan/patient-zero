@@ -5,8 +5,9 @@ import { buildCity } from './city.js';
 import {
   makeCharacter, animateWalk, box, groundGlow, CIV_PALETTES,
   makeBarrel, makeHealthKit, makePoliceCar, makeTank, makeHelicopter,
+  makePowerPickup, makeGasCloud, makeShockRing, makeHealer, makeHealBeam, POWERS,
 } from './models.js';
-import { LEVELS, HEADLINES, COP_TYPES, VEHICLES } from './levels.js';
+import { LEVELS, HEADLINES, COP_TYPES, VEHICLES, HEALER } from './levels.js';
 
 const R = 0.45;
 const INFECT_DIST = 1.1;
@@ -29,7 +30,11 @@ export class Game {
     this.city = buildCity(this.scene, cfg);
     this.civs = []; this.zombies = []; this.cops = []; this.bullets = [];
     this.barrels = []; this.kits = []; this.vehicles = []; this.shells = [];
-    this.debris = [];
+    this.debris = []; this.healers = []; this.beams = [];
+    this.powerPickups = []; this.gasClouds = []; this.rings = [];
+    this.powers = { gas: 0, stun: 0, horde: 0, rage: 0 };
+    this.rageUntil = 0;
+    this.healed = 0;
     this.parts = new ParticlePool(this.scene);
     this.elapsed = 0; this.time = 0;
     this.infectedCount = 0; this.kills = 0;
@@ -39,6 +44,7 @@ export class Game {
     this.headlineIdx = 0;
     this.schedule = cfg.responders.map(r => ({ ...r, done: false }));
     this.vSchedule = (cfg.vehicles || []).map(v => ({ ...v, done: false }));
+    this.hSchedule = (cfg.healers || []).map(h => ({ ...h, done: false }));
 
     const ps = this.city.streetPointNear(this.city.W / 2, this.city.H / 2, 2, 6);
     this.player = this.makeEntity('player', ps.x, ps.z);
@@ -56,6 +62,11 @@ export class Game {
     for (let i = 0; i < cfg.civs; i++) { const p = this.city.randomStreetPoint(); this.spawnCiv(p.x, p.z); }
     for (let i = 0; i < (cfg.barrels || 0); i++) { const p = this.city.randomStreetPoint(); this.spawnBarrel(p.x, p.z); }
     for (let i = 0; i < (cfg.healthKits || 0); i++) { const p = this.city.randomStreetPoint(); this.spawnKit(p.x, p.z); }
+    const ptypes = Object.keys(POWERS);
+    for (let i = 0; i < (cfg.powers || 0); i++) {
+      const p = this.city.randomStreetPoint();
+      this.spawnPowerPickup(ptypes[i % ptypes.length], p.x, p.z);
+    }
 
     for (const grp of cfg.initial) {
       for (let i = 0; i < grp.count; i++) {
@@ -75,7 +86,7 @@ export class Game {
     const mesh = makeCharacter(kind, palette);
     mesh.position.set(x, 0, z);
     this.scene.add(mesh);
-    return { mesh, x, z, vx: 0, vz: 0, kind, speed: 0, nextThink: Math.random() * 0.3, wander: null };
+    return { mesh, x, z, vx: 0, vz: 0, kind, speed: 0, nextThink: Math.random() * 0.3, wander: null, stunUntil: 0 };
   }
 
   spawnCiv(x, z) {
@@ -91,7 +102,7 @@ export class Game {
   spawnCop(x, z, type) {
     const e = this.makeEntity(type, x, z);
     const t = COP_TYPES[type];
-    e.copType = type; e.hp = t.hp; e.nextShot = 0; e.lastBite = 0;
+    e.copType = type; e.hp = t.hp; e.nextShot = 0; e.lastBite = -999;
     this.cops.push(e); return e;
   }
   spawnBarrel(x, z) {
@@ -104,6 +115,67 @@ export class Game {
     this.scene.add(mesh);
     this.kits.push({ mesh, x, z });
   }
+  spawnPowerPickup(type, x, z) {
+    const mesh = makePowerPickup(type); mesh.position.set(x, 0, z);
+    this.scene.add(mesh);
+    this.powerPickups.push({ mesh, x, z, type });
+  }
+  spawnHealer(x, z) {
+    const mesh = makeHealer(); mesh.position.set(x, 0, z);
+    this.scene.add(mesh);
+    const h = { mesh, x, z, vx: 0, vz: 0, kind: 'healer', hp: HEALER.hp, nextThink: 0, target: null, channel: 0, wander: null, stunUntil: 0, lastBite: -999 };
+    this.healers.push(h);
+    return h;
+  }
+
+  // ---- powers ----
+  usePower(type) {
+    if (this.over || !this.powers[type]) return false;
+    this.powers[type]--;
+    const p = this.player;
+
+    if (type === 'gas') {
+      const radius = 7;
+      const mesh = makeGasCloud(radius);
+      mesh.position.set(p.x, 0, p.z);
+      this.scene.add(mesh);
+      this.gasClouds.push({ mesh, x: p.x, z: p.z, r: radius, life: 12, t: 0 });
+      this.parts.burst(p.x, 1, p.z, 0x7CFF4A, 26);
+      AudioFX.infect();
+      this.msgs.push({ type: 'stinger', text: 'BIO-CANISTER RELEASED' });
+
+    } else if (type === 'stun') {
+      const radius = 14, dur = 5;
+      const ring = makeShockRing();
+      ring.position.set(p.x, 0.2, p.z);
+      this.scene.add(ring);
+      this.rings.push({ mesh: ring, r: 0, max: radius, life: 0.6 });
+      let n = 0;
+      const zap = (e) => { if (Math.hypot(e.x - p.x, e.z - p.z) < radius) { e.stunUntil = this.time + dur; e.vx = e.vz = 0; n++; } };
+      this.cops.forEach(zap); this.civs.forEach(zap); this.healers.forEach(zap);
+      this.vehicles.forEach(v => { if (v.vtype !== 'heli') zap(v); });
+      AudioFX.stinger();
+      this.msgs.push({ type: 'shake', amt: 0.5 });
+      this.msgs.push({ type: 'stinger', text: `SHOCK CHARGE — ${n} STUNNED` });
+
+    } else if (type === 'horde') {
+      const radius = 26, dur = 14;
+      let n = 0;
+      for (const z of this.zombies) {
+        if (Math.hypot(z.x - p.x, z.z - p.z) < radius) { z.rallyUntil = this.time + dur; n++; this.parts.burst(z.x, 1.6, z.z, 0xC46AFF, 4); }
+      }
+      AudioFX.turn();
+      this.msgs.push({ type: 'stinger', text: `HIVE CALL — ${n} ANSWER` });
+
+    } else if (type === 'rage') {
+      this.rageUntil = this.time + 9;
+      this.lungeReadyAt = 0;
+      this.parts.burst(p.x, 1, p.z, 0xFF6A4A, 20);
+      AudioFX.lunge();
+      this.msgs.push({ type: 'stinger', text: 'ADRENAL SURGE' });
+    }
+    return true;
+  }
 
   spawnVehicle(x, z, vtype) {
     const spec = VEHICLES[vtype];
@@ -114,7 +186,7 @@ export class Game {
     const y = vtype === 'heli' ? 9 : 0;
     mesh.position.set(x, y, z);
     this.scene.add(mesh);
-    const v = { mesh, x, z, y, vx: 0, vz: 0, vtype, hp: spec.hp, nextShot: 0, life: spec.life || 0, deployed: false, leaving: false, lastBite: 0 };
+    const v = { mesh, x, z, y, vx: 0, vz: 0, vtype, hp: spec.hp, nextShot: 0, life: spec.life || 0, deployed: false, leaving: false, lastBite: -999, stunUntil: 0 };
     this.vehicles.push(v);
     return v;
   }
@@ -281,6 +353,8 @@ export class Game {
     for (const z of this.zombies) this.moveEntity(z, dt);
     for (const cop of this.cops) this.moveEntity(cop, dt);
 
+    this.updateHealers(dt);
+    this.updateGas(dt);
     this.updateVehicles(dt);
     this.updateProps(dt);
     this.updateDebris(dt);
@@ -291,10 +365,16 @@ export class Game {
       if (this.dist(this.player, c) < INFECT_DIST) { this.infect(c, true); continue; }
       for (const z of this.zombies) if (this.dist(z, c) < INFECT_DIST) { this.infect(c, false); break; }
     }
-    // bites
+    // bites — a dash is a takedown, a walk-up mauling is not
+    const dashing = this.time < this.lungeUntil;
     for (const cop of this.cops) {
-      if (this.dist(this.player, cop) < BITE_DIST) this.bite(cop, 2);
+      if (this.dist(this.player, cop) < BITE_DIST + (dashing ? 0.5 : 0)) this.bite(cop, dashing ? 99 : 2);
       else for (const z of this.zombies) if (this.dist(z, cop) < BITE_DIST) { this.bite(cop, 1); break; }
+    }
+    // Only patient zero can drop a medic � his suppression field holds the
+    // horde off, so hunting him is the player's job.
+    for (const h of this.healers.slice()) {
+      if (this.dist(this.player, h) < BITE_DIST + (dashing ? 0.5 : 0)) this.hitHealer(h, dashing ? 99 : 2);
     }
     // zombies maul ground vehicles
     for (let i = this.vehicles.length - 1; i >= 0; i--) {
@@ -317,21 +397,23 @@ export class Game {
     // Win needs civilians cleared and every *ground* responder down. Helicopters
     // are excluded on purpose — they leave on a timer and must never softlock it.
     const tanksLeft = this.vehicles.filter(v => v.vtype === 'tank').length;
-    if (this.aliveCivs <= 0 && this.cops.length === 0 && tanksLeft === 0) this.endLevel(true);
+    if (this.aliveCivs <= 0 && this.cops.length === 0 && tanksLeft === 0 && this.healers.length === 0) this.endLevel(true);
   }
 
   updatePlayer(dt, input) {
     const p = this.player;
     const lunging = this.time < this.lungeUntil;
     if (!lunging) {
+      const raging = this.time < this.rageUntil;
+      const spd = raging ? 9 : 6;
       const dx = input.mx || 0, dz = input.mz || 0;
       if (dx || dz) {
         const l = Math.hypot(dx, dz); this.dir.set(dx / l, dz / l);
-        p.vx = this.dir.x * 6; p.vz = this.dir.y * 6;
+        p.vx = this.dir.x * spd; p.vz = this.dir.y * spd;
       } else { p.vx = 0; p.vz = 0; }
       if (input.lunge && this.time > this.lungeReadyAt) {
-        this.lungeReadyAt = this.time + 1.6; this.lungeUntil = this.time + 0.2;
-        p.vx = this.dir.x * 17; p.vz = this.dir.y * 17;
+        this.lungeReadyAt = this.time + (raging ? 0.35 : 1.6); this.lungeUntil = this.time + 0.2;
+        p.vx = this.dir.x * (raging ? 22 : 17); p.vz = this.dir.y * (raging ? 22 : 17);
         AudioFX.lunge(); this.parts.burst(p.x, 1, p.z, 0x53ff7a, 6);
       }
     }
@@ -341,7 +423,7 @@ export class Game {
       for (const b of this.barrels) if (!b.dead && Math.hypot(b.x - p.x, b.z - p.z) < 1.5) this.popBarrel(b);
     }
     if (this.time > this.nextRegenAt) { this.nextRegenAt = this.time + 9; if (p.hp < p.maxHp) p.hp++; }
-    this.lungeCooldown = THREE.MathUtils.clamp((this.lungeReadyAt - this.time) / 1.6, 0, 1);
+    this.lungeCooldown = THREE.MathUtils.clamp((this.lungeReadyAt - this.time) / (this.time < this.rageUntil ? 0.35 : 1.6), 0, 1);
     this.aura.position.set(p.x, 0.05, p.z);
     const s = 1 + Math.sin(this.time * 4) * 0.08; this.aura.scale.setScalar(s);
   }
@@ -402,6 +484,19 @@ export class Game {
         this.msgs.push({ type: 'headline', text: '[ BIOMASS ABSORBED — VITALS RESTORED ]' });
       }
     }
+    // powers stack without limit — hoard them and fire on 1-4
+    for (let i = this.powerPickups.length - 1; i >= 0; i--) {
+      const k = this.powerPickups[i];
+      k.mesh.rotation.y += 0.028;
+      k.mesh.position.y = 0.2 + Math.sin(this.time * 2.6 + k.x) * 0.14;
+      if (this.dist(this.player, k) < 1.4) {
+        this.powers[k.type]++;
+        this.parts.burst(k.x, 1, k.z, POWERS[k.type].color, 16);
+        AudioFX.click();
+        this.remove(k, this.powerPickups);
+        this.msgs.push({ type: 'headline', text: `[ ${POWERS[k.type].name} ACQUIRED — PRESS ${POWERS[k.type].key} ]` });
+      }
+    }
   }
 
   updateBarrels() {
@@ -414,6 +509,7 @@ export class Game {
 
   thinkCiv(c) {
     if (c.turning) return;
+    if (this.time < c.stunUntil) { c.vx = c.vz = 0; return; }
     let threat = this.nearest(this.zombies, c.x, c.z, 6);
     if (!threat && this.dist(this.player, c) < 6) threat = this.player;
     const spd = 2.4 + 1.9 * (c.stamina / 100);
@@ -432,9 +528,19 @@ export class Game {
   }
 
   thinkZombie(z) {
-    let tgt = this.nearest(this.civs, z.x, z.z, 11, e => !e.turning);
-    if (!tgt) tgt = this.nearest(this.cops, z.x, z.z, 13);
+    // Rallied by the Hive Call: stick with patient zero, but still snap at
+    // anything that wanders close.
+    const rallied = this.time < (z.rallyUntil || 0);
+    let tgt = this.nearest(this.civs, z.x, z.z, rallied ? 6 : 11, e => !e.turning);
+    if (!tgt) tgt = this.nearest(this.cops, z.x, z.z, rallied ? 7 : 13);
     if (!tgt) tgt = this.nearest(this.vehicles.filter(v => v.vtype !== 'heli'), z.x, z.z, 12);
+    if (!tgt && rallied) {
+      const d = this.dist(this.player, z);
+      if (d > 3) { const a = Math.atan2(this.player.x - z.x, this.player.z - z.z);
+        z.vx = Math.sin(a) * z.speed * 1.15; z.vz = Math.cos(a) * z.speed * 1.15; }
+      else { z.vx = z.vz = 0; }
+      return;
+    }
     if (tgt) {
       const a = Math.atan2(tgt.x - z.x, tgt.z - z.z);
       z.vx = Math.sin(a) * z.speed; z.vz = Math.cos(a) * z.speed;
@@ -446,6 +552,7 @@ export class Game {
   }
 
   thinkCop(cop) {
+    if (this.time < cop.stunUntil) { cop.vx = cop.vz = 0; return; }
     const t = COP_TYPES[cop.copType];
     let tgt = this.nearest(this.zombies, cop.x, cop.z, t.sight);
     const pd = this.dist(this.player, cop);
@@ -465,12 +572,140 @@ export class Game {
     }
   }
 
+  hitHealer(h, dmg) {
+    if (this.over || this.time < (h.lastBite || 0) + 0.45) return;
+    h.lastBite = this.time;
+    h.hp -= dmg;
+    this.parts.burst(h.x, 1.2, h.z, 0xb32626, 6);
+    if (h.hp <= 0) {
+      const { x, z } = h;
+      if (h.beam) { this.scene.remove(h.beam); h.beam = null; }
+      this.remove(h, this.healers);
+      AudioFX.copDown(); this.kills++; this.infectedCount++;
+      this.spawnZombie(x, z);              // even the medic joins the horde
+      this.msgs.push({ type: 'stinger', text: 'MEDIC DOWN' });
+      this.msgs.push({ type: 'shake', amt: 0.4 });
+    }
+  }
+
+  // The medic hunts the infected and converts them back into civilians, which
+  // pushes the outbreak percentage *down*. Ignoring him stalls the district.
+  updateHealers(dt) {
+    for (const h of this.healers) {
+      if (this.time < h.stunUntil) { h.vx = h.vz = 0; this.moveEntity(h, dt); continue; }
+      const pd = this.dist(this.player, h);
+
+      // keep away from patient zero
+      if (pd < HEALER.fleeRange) {
+        const a = Math.atan2(h.x - this.player.x, h.z - this.player.z);
+        h.vx = Math.sin(a) * HEALER.speed * 1.15; h.vz = Math.cos(a) * HEALER.speed * 1.15;
+        h.target = null; h.channel = 0;
+      } else {
+        if (!h.target || !this.zombies.includes(h.target)) {
+          h.target = this.nearest(this.zombies, h.x, h.z, HEALER.seek);
+          h.channel = 0;
+        }
+        if (h.target) {
+          const d = this.dist(h.target, h);
+          const a = Math.atan2(h.target.x - h.x, h.target.z - h.z);
+          h.mesh.rotation.y = a;
+          // Close well inside heal range and keep pace: patients wander, and
+          // sitting exactly on the boundary reset the channel every few frames
+          // so a cure never completed.
+          if (d > HEALER.healRange * 0.7) { h.vx = Math.sin(a) * HEALER.speed; h.vz = Math.cos(a) * HEALER.speed; }
+          else { h.vx = h.vz = 0; }
+          if (d <= HEALER.healRange) {
+            h.channel += dt;
+            if (h.channel >= HEALER.healTime) { h.channel = 0; this.cure(h, h.target); h.target = null; }
+          } else {
+            h.channel = Math.max(0, h.channel - dt * 2);   // decay, don't hard-reset
+          }
+        } else {
+          if (!h.wander || Math.hypot(h.x - h.wander.x, h.z - h.wander.z) < 1) h.wander = this.city.streetPointNear(h.x, h.z, 5, 18);
+          const a = Math.atan2(h.wander.x - h.x, h.wander.z - h.z);
+          h.vx = Math.sin(a) * HEALER.speed * 0.6; h.vz = Math.cos(a) * HEALER.speed * 0.6;
+        }
+      }
+      this.moveEntity(h, dt);
+
+      // beam to whoever is being cured
+      if (h.target && h.channel > 0) {
+        if (!h.beam) { h.beam = makeHealBeam(); this.scene.add(h.beam); }
+        const t = h.target;
+        const mid = { x: (h.x + t.x) / 2, z: (h.z + t.z) / 2 };
+        const len = Math.hypot(t.x - h.x, t.z - h.z);
+        h.beam.position.set(mid.x, 1.2, mid.z);
+        h.beam.scale.set(1, Math.max(0.1, len), 1);
+        h.beam.rotation.z = Math.PI / 2;
+        h.beam.rotation.y = -Math.atan2(t.z - h.z, t.x - h.x);
+        h.beam.visible = true;
+        if (Math.random() < 0.3) this.parts.burst(t.x, 1.2, t.z, 0x6ac8ff, 2);
+      } else if (h.beam) { h.beam.visible = false; }
+    }
+  }
+
+  cure(healer, zombie) {
+    if (!this.zombies.includes(zombie)) return;
+    const { x, z } = zombie;
+    this.remove(zombie, this.zombies);
+    this.parts.burst(x, 1.2, z, 0x6ac8ff, 18);
+    const c = this.spawnCiv(x, z);
+    c.state = 'panic'; c.calmAt = this.time + 3;
+    this.aliveCivs++;                       // outbreak percentage drops
+    this.infectedCount = Math.max(0, this.infectedCount - 1);
+    this.healed++;
+    AudioFX.click();
+    this.msgs.push({ type: 'headline', text: '[ FIELD MEDIC IS CURING THE INFECTED — STOP HIM ]' });
+  }
+
+  updateGas(dt) {
+    for (let i = this.gasClouds.length - 1; i >= 0; i--) {
+      const c = this.gasClouds[i];
+      c.life -= dt; c.t += dt;
+      if (c.life <= 0) { this.scene.remove(c.mesh); this.gasClouds.splice(i, 1); continue; }
+      const pulse = 1 + Math.sin(c.t * 2.2) * 0.06;
+      c.mesh.userData.shell.scale.set(pulse, 0.45 * pulse, pulse);
+      c.mesh.userData.core.rotation.y += dt * 0.5;
+      const fade = Math.min(1, c.life / 3);
+      c.mesh.userData.shell.material.opacity = 0.16 * fade;
+      c.mesh.userData.core.material.opacity = 0.12 * fade;
+      if (Math.random() < 0.25) this.parts.burst(c.x + (Math.random() - 0.5) * c.r, 0.6, c.z + (Math.random() - 0.5) * c.r, 0x7CFF4A, 1);
+
+      // anything that breathes it turns
+      for (const civ of this.civs) {
+        if (civ.turning) continue;
+        if (Math.hypot(civ.x - c.x, civ.z - c.z) < c.r) {
+          civ.gas = (civ.gas || 0) + dt;
+          if (civ.gas > 0.9) this.infect(civ, false);
+        }
+      }
+      // responders caught in it go down too
+      for (const cop of this.cops.slice()) {
+        if (Math.hypot(cop.x - c.x, cop.z - c.z) < c.r) {
+          cop.gas = (cop.gas || 0) + dt;
+          if (cop.gas > 2.2) { cop.gas = 0; this.bite(cop, 1); }
+        }
+      }
+    }
+    for (let i = this.rings.length - 1; i >= 0; i--) {
+      const r = this.rings[i];
+      r.life -= dt;
+      if (r.life <= 0) { this.scene.remove(r.mesh); this.rings.splice(i, 1); continue; }
+      r.r += dt * (r.max / 0.6);
+      r.mesh.scale.setScalar(Math.max(0.01, r.r));
+      r.mesh.material.opacity = Math.max(0, r.life / 0.6) * 0.9;
+    }
+  }
+
   updateVehicles(dt) {
     for (let i = this.vehicles.length - 1; i >= 0; i--) {
       const v = this.vehicles[i];
       const spec = VEHICLES[v.vtype];
       const p = this.player;
       const d = this.dist(p, v);
+
+      // shock charge locks ground vehicles up
+      if (v.vtype !== 'heli' && this.time < v.stunUntil) { v.vx = v.vz = 0; this.moveVehicle(v, dt); continue; }
 
       if (v.vtype === 'car') {
         // race to the player, drop two officers, then peel away and despawn
@@ -633,6 +868,17 @@ export class Game {
           this.spawnVehicle(p.x, p.z, s.type);
         }
         this.msgs.push({ type: 'stinger', text: VEHICLES[s.type].label });
+        AudioFX.siren();
+      }
+    }
+    for (const s of this.hSchedule) {
+      if (!s.done && this.outbreak >= s.pct) {
+        s.done = true;
+        for (let i = 0; i < s.count; i++) {
+          const p = this.city.streetPointNear(this.player.x, this.player.z, 20, 34);
+          this.spawnHealer(p.x, p.z);
+        }
+        this.msgs.push({ type: 'stinger', text: HEALER.label });
         AudioFX.siren();
       }
     }
