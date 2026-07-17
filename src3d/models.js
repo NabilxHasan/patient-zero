@@ -160,11 +160,12 @@ export const CIV_PALETTES = [
 ];
 
 // kind: 'civ' | 'zombie' | 'police' | 'military' | 'player'
-export function makeCharacter(kind, palette) {
+export function makeCharacter(kind, palette, variant) {
   const g = new THREE.Group();
   const p = palette || CIV_PALETTES[0];
   const parts = {};
   let scale = 1;
+  const oldSchool = variant === 'oldSchool';
 
   if (kind === 'civ') {
     g.add(box(0.6, 0.7, 0.4, p.shirt, { cast: true }).translateY(0.95));   // torso
@@ -196,7 +197,9 @@ export function makeCharacter(kind, palette) {
 
   } else if (kind === 'police' || kind === 'military') {
     const mil = kind === 'military';
-    const body = mil ? 0x4c5b32 : 0x2c4585;
+    // Hollowbrook's finest are a generation behind: khaki sheriffs and
+    // olive-drab conscripts instead of blue tac gear and plate carriers.
+    const body = oldSchool ? (mil ? 0x6b6a3a : 0x8a7a52) : (mil ? 0x4c5b32 : 0x2c4585);
     const skin = 0xe3c39a;
     g.add(box(0.64, 0.72, 0.42, body, { cast: true }).translateY(0.95));
     if (mil) {
@@ -211,8 +214,12 @@ export function makeCharacter(kind, palette) {
     const head = box(0.42, 0.4, 0.42, skin, { cast: true }); head.position.y = 1.55; g.add(head);
     g.add(faceDecal(kind, 0.38, 1.53, 0.215));
     if (mil) {
-      g.add(box(0.5, 0.26, 0.5, 0x5d7040, {}).translateY(1.74));                                // helmet
-      g.add(box(0.52, 0.06, 0.16, 0x4a5a33, { cast: false }).translateY(1.66).translateZ(0.22)); // brow rim
+      // WW2-style brodie dish vs a modern shell
+      g.add(box(oldSchool ? 0.62 : 0.5, oldSchool ? 0.16 : 0.26, oldSchool ? 0.62 : 0.5, oldSchool ? 0x7b6a3a : 0x5d7040, {}).translateY(1.74));
+      g.add(box(0.52, 0.06, 0.16, 0x4a5a33, { cast: false }).translateY(1.66).translateZ(0.22));
+    } else if (oldSchool) {
+      g.add(box(0.62, 0.1, 0.62, 0x6b5a34, {}).translateY(1.78));                               // sheriff brim
+      g.add(box(0.4, 0.22, 0.4, 0x7a6a44, {}).translateY(1.86));                                // crown
     } else {
       g.add(box(0.48, 0.16, 0.46, 0x1a2952, {}).translateY(1.76));                              // cap
       g.add(box(0.44, 0.06, 0.22, 0x14203f, { cast: false }).translateY(1.7).translateZ(0.3));  // brim
@@ -553,6 +560,161 @@ export function makeHelicopter() {
   const spot = box(0.3, 0.2, 0.2, 0xfff0c0, { emissive: 0xffe9a8, emissiveIntensity: 4, cast: false });
   spot.position.set(0, -0.6, 1.7); g.add(spot);
   g.userData.rotor = rotor; g.userData.tailRotor = tailRotor;
+  return g;
+}
+
+// ---------------------------------------------------------------- rural theme
+
+export function makeBarn(w, h, d, color) {
+  const g = new THREE.Group();
+  g.add(box(w, h, d, color, { cast: true, receive: true }).translateY(h / 2));
+  // gambrel roof out of two stacked slabs
+  const r1 = box(w + 0.4, 0.5, d + 0.4, 0x6b2a22, { cast: true }); r1.position.y = h + 0.25; g.add(r1);
+  const r2 = box(w * 0.7, 0.5, d + 0.3, 0x7a3228, {}); r2.position.y = h + 0.7; g.add(r2);
+  // white trim + big doors
+  g.add(box(w + 0.05, 0.16, 0.16, 0xe8e2d4, {}).translateY(h * 0.55).translateZ(d / 2));
+  g.add(box(0.16, h * 0.6, 0.16, 0xe8e2d4, {}).translateX(-w * 0.28).translateY(h * 0.3).translateZ(d / 2));
+  g.add(box(0.16, h * 0.6, 0.16, 0xe8e2d4, {}).translateX(w * 0.28).translateY(h * 0.3).translateZ(d / 2));
+  const door = box(w * 0.42, h * 0.55, 0.12, 0x4a2318, {});
+  door.position.set(0, h * 0.28, d / 2 + 0.06); g.add(door);
+  return g;
+}
+
+export function makeSilo(h) {
+  const g = new THREE.Group();
+  const body = cyl(1.5, h, 0xb9bcc0, { cast: true }); body.position.y = h / 2; g.add(body);
+  for (let i = 1; i < Math.floor(h / 1.6); i++) {
+    g.add(cyl(1.55, 0.1, 0x8f949a, {}).translateY(i * 1.6));
+  }
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(1.6, 1.2, 12), mat(0x6b7078, 0, 1, 0.7));
+  cone.position.y = h + 0.6; cone.castShadow = true; g.add(cone);
+  return g;
+}
+
+export function makeHaystack() {
+  const g = new THREE.Group();
+  const bale = cyl(0.7, 1.2, 0xc9a94a, { cast: true });
+  bale.rotation.z = Math.PI / 2; bale.position.y = 0.7; g.add(bale);
+  g.add(box(1.24, 0.1, 1.44, 0xa88c38, {}).translateY(0.7));
+  return g;
+}
+
+export function makeFence(len, horizontal) {
+  const g = new THREE.Group();
+  const wood = 0x8a6a3a;
+  const n = Math.max(2, Math.floor(len / 2));
+  for (let i = 0; i <= n; i++) {
+    const t = (i / n - 0.5) * len;
+    const post = box(0.14, 1.1, 0.14, 0x6b4a2a, {});
+    post.position.set(horizontal ? t : 0, 0.55, horizontal ? 0 : t);
+    g.add(post);
+  }
+  for (const y of [0.45, 0.85]) {
+    const rail = box(horizontal ? len : 0.08, 0.09, horizontal ? 0.08 : len, wood, {});
+    rail.position.y = y; g.add(rail);
+  }
+  return g;
+}
+
+// Livestock — infectable, and they turn into something much worse.
+export function makeAnimal(infected) {
+  const g = new THREE.Group();
+  const hide = infected ? 0x7a9a5a : 0xdad2c4;
+  const spot = infected ? 0x4a6033 : 0x3a3630;
+  const parts = {};
+  g.add(box(0.75, 0.7, 1.5, hide, { cast: true }).translateY(0.95));
+  g.add(box(0.4, 0.3, 0.4, spot, {}).translateY(1.05).translateZ(0.2));   // patch
+  const head = box(0.45, 0.42, 0.5, hide, { cast: true }); head.position.set(0, 1.0, 0.95); g.add(head);
+  g.add(faceDecal(infected ? 'zombie' : 'civ', 0.36, 1.0, 1.21));
+  g.add(box(0.12, 0.2, 0.12, 0xe8e2d4, {}).translateX(-0.16).translateY(1.24).translateZ(0.86)); // horns
+  g.add(box(0.12, 0.2, 0.12, 0xe8e2d4, {}).translateX(0.16).translateY(1.24).translateZ(0.86));
+  parts.legL = limb(-0.26, 0.6, 0.5, 0.16, 0.6, 0.16, spot);
+  parts.legR = limb(0.26, 0.6, 0.5, 0.16, 0.6, 0.16, spot);
+  parts.armL = limb(-0.26, 0.6, -0.5, 0.16, 0.6, 0.16, spot);
+  parts.armR = limb(0.26, 0.6, -0.5, 0.16, 0.6, 0.16, spot);
+  Object.values(parts).forEach(l => g.add(l));
+  g.userData.parts = parts;
+  g.userData.kind = infected ? 'zombie' : 'civ';
+  g.userData.stepPhase = Math.random() * Math.PI * 2;
+  return g;
+}
+
+// A farm tool held by a civilian who has decided to fight.
+export function makeFarmTool(kind) {
+  const g = new THREE.Group();
+  g.add(box(0.07, 0.07, 1.3, 0x8a6a3a, {}).translateZ(0.3));
+  if (kind === 'pitchfork') {
+    for (const x of [-0.14, 0, 0.14]) g.add(box(0.05, 0.05, 0.4, 0xb9bcc0, {}).translateX(x).translateZ(1.05));
+    g.add(box(0.34, 0.05, 0.06, 0xb9bcc0, {}).translateZ(0.87));
+  } else {
+    g.add(box(0.5, 0.06, 0.18, 0xb9bcc0, {}).translateX(0.2).translateZ(0.95));  // scythe blade
+  }
+  return g;
+}
+
+// ---------------------------------------------------------------- neon theme
+
+const _billboardTex = new Map();
+function billboardTexture(i) {
+  if (_billboardTex.has(i)) return _billboardTex.get(i);
+  const c = document.createElement('canvas'); c.width = 256; c.height = 128;
+  const x = c.getContext('2d');
+  const schemes = [
+    { bg: '#12021e', a: '#ff2fb9', b: '#00e5ff', t: 'SYNTH' },
+    { bg: '#001a1a', a: '#00ffc8', b: '#ffe600', t: 'NOODLE' },
+    { bg: '#1a0010', a: '#ff5c00', b: '#ff2fb9', t: 'CYBER' },
+    { bg: '#050028', a: '#7c4dff', b: '#00e5ff', t: 'HALCYON' },
+  ];
+  const s = schemes[i % schemes.length];
+  x.fillStyle = s.bg; x.fillRect(0, 0, 256, 128);
+  x.strokeStyle = s.b; x.lineWidth = 4; x.strokeRect(6, 6, 244, 116);
+  for (let k = 0; k < 5; k++) {                       // scanline glow bars
+    x.fillStyle = k % 2 ? s.a : s.b;
+    x.globalAlpha = 0.25;
+    x.fillRect(16, 20 + k * 20, 224, 6);
+  }
+  x.globalAlpha = 1;
+  x.fillStyle = s.a;
+  x.font = 'bold 46px Consolas, monospace';
+  x.textAlign = 'center';
+  x.fillText(s.t, 128, 78);
+  const t = new THREE.CanvasTexture(c);
+  _billboardTex.set(i, t);
+  return t;
+}
+
+export function makeBillboard(i) {
+  const g = new THREE.Group();
+  const tex = billboardTexture(i);
+  const panel = new THREE.Mesh(
+    new THREE.PlaneGeometry(5.2, 2.6),
+    new THREE.MeshStandardMaterial({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 1.7, roughness: 0.6 })
+  );
+  panel.position.y = 2.2; g.add(panel);
+  const back = box(5.4, 2.8, 0.16, 0x14161c, {}); back.position.set(0, 2.2, -0.1); g.add(back);
+  for (const x of [-2.0, 2.0]) g.add(box(0.16, 2.4, 0.16, 0x2b2f38, {}).translateX(x).translateY(1.0).translateZ(-0.1));
+  return g;
+}
+
+// Emissive strip used to line neon buildings.
+export function makeNeonStrip(len, horizontal, color) {
+  const m = box(horizontal ? len : 0.14, 0.14, horizontal ? 0.14 : len, color,
+    { emissive: color, emissiveIntensity: 2.6 });
+  return m;
+}
+
+export function makeHoverCar(color) {
+  const g = new THREE.Group();
+  const hull = box(1.8, 0.5, 3.6, color, { cast: true, roughness: 0.35 }); hull.position.y = 0.9; g.add(hull);
+  const canopy = box(1.5, 0.42, 1.7, 0x121a24, { roughness: 0.15 }); canopy.position.set(0, 1.32, 0.1); g.add(canopy);
+  g.add(box(1.9, 0.1, 1.0, color, {}).translateY(0.62).translateZ(-1.3));   // rear wing
+  for (const [x, z] of [[-0.85, 1.1], [0.85, 1.1], [-0.85, -1.1], [0.85, -1.1]]) {
+    const pod = cyl(0.32, 0.3, 0x2b2f38, {}); pod.position.set(x, 0.72, z); g.add(pod);
+    const jet = cyl(0.24, 0.12, 0x00e5ff, { emissive: 0x00e5ff, emissiveIntensity: 3 });
+    jet.position.set(x, 0.56, z); g.add(jet);
+  }
+  g.add(box(1.3, 0.08, 0.1, 0x00e5ff, { emissive: 0x00e5ff, emissiveIntensity: 3 }).translateY(0.9).translateZ(1.82));
+  const glow = groundGlow(0x00e5ff, 5, 0.3); glow.position.y = 0.05; g.add(glow);
   return g;
 }
 

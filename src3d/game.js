@@ -6,6 +6,7 @@ import {
   makeCharacter, animateWalk, box, groundGlow, CIV_PALETTES,
   makeBarrel, makeHealthKit, makePoliceCar, makeTank, makeHelicopter,
   makePowerPickup, makeGasCloud, makeShockRing, makeHealer, makeHealBeam, POWERS,
+  makeAnimal, makeFarmTool,
 } from './models.js';
 import { LEVELS, HEADLINES, COP_TYPES, VEHICLES, HEALER } from './levels.js';
 
@@ -64,6 +65,7 @@ export class Game {
     for (let i = 0; i < cfg.civs; i++) { const p = this.city.randomStreetPoint(); this.spawnCiv(p.x, p.z); }
     for (let i = 0; i < (cfg.barrels || 0); i++) { const p = this.city.randomStreetPoint(); this.spawnBarrel(p.x, p.z); }
     for (let i = 0; i < (cfg.healthKits || 0); i++) { const p = this.city.randomStreetPoint(); this.spawnKit(p.x, p.z); }
+    for (let i = 0; i < (cfg.animals || 0); i++) { const p = this.city.randomStreetPoint(); this.spawnAnimal(p.x, p.z); }
     const ptypes = Object.keys(POWERS);
     for (let i = 0; i < (cfg.powers || 0); i++) {
       const p = this.city.randomStreetPoint();
@@ -84,8 +86,8 @@ export class Game {
   }
 
   // ---- factories ----
-  makeEntity(kind, x, z, palette) {
-    const mesh = makeCharacter(kind, palette);
+  makeEntity(kind, x, z, palette, variant) {
+    const mesh = makeCharacter(kind, palette, variant);
     mesh.position.set(x, 0, z);
     this.scene.add(mesh);
     return { mesh, x, z, vx: 0, vz: 0, kind, speed: 0, nextThink: Math.random() * 0.3, wander: null, stunUntil: 0 };
@@ -94,6 +96,15 @@ export class Game {
   spawnCiv(x, z) {
     const e = this.makeEntity('civ', x, z, CIV_PALETTES[(Math.random() * CIV_PALETTES.length) | 0]);
     e.state = 'calm'; e.turning = false; e.stamina = 100; e.calmAt = 0;
+    // Hollowbrook farmers don't all run — some pick up a tool and swing back.
+    if (this.cfg.civsFightBack && Math.random() < 0.45) {
+      e.armed = true; e.nextSwing = 0;
+      const tool = makeFarmTool(Math.random() < 0.5 ? 'pitchfork' : 'scythe');
+      tool.position.set(0.34, 1.05, 0);
+      tool.rotation.x = -0.5;
+      e.mesh.add(tool);
+    }
+    if (this.cfg.civsBlink) { e.blink = true; e.nextBlink = 0; }   // Neo Halcyon hover-shoes
     this.civs.push(e); return e;
   }
   spawnZombie(x, z) {
@@ -102,11 +113,23 @@ export class Game {
     this.zombies.push(e); this.parts.burst(x, 1, z, 0x53ff7a, 14); return e;
   }
   spawnCop(x, z, type) {
-    const e = this.makeEntity(type, x, z);
+    const e = this.makeEntity(type, x, z, null, this.cfg.oldSchool ? 'oldSchool' : null);
     const t = COP_TYPES[type];
     e.copType = type; e.hp = t.hp; e.nextShot = 0; e.lastBite = -999;
     this.cops.push(e); return e;
   }
+  // Livestock: counts as a civilian for the outbreak, but slower and dumber.
+  spawnAnimal(x, z) {
+    const mesh = makeAnimal(false);
+    mesh.position.set(x, 0, z);
+    this.scene.add(mesh);
+    const e = { mesh, x, z, vx: 0, vz: 0, kind: 'civ', animal: true, state: 'calm', turning: false,
+      stamina: 100, calmAt: 0, nextThink: Math.random() * 0.3, wander: null, stunUntil: 0 };
+    this.civs.push(e);
+    this.aliveCivs++; this.initialCivs++;      // livestock counts toward the district
+    return e;
+  }
+
   spawnBarrel(x, z) {
     const mesh = makeBarrel(); mesh.position.set(x, 0, z);
     this.scene.add(mesh);
@@ -274,7 +297,24 @@ export class Game {
     if (byPlayer) this.msgs.push({ type: 'shake', amt: 0.25 });
     for (const o of this.civs) if (!o.turning && this.dist(o, civ) < 5) { o.state = 'panic'; o.calmAt = this.time + 2.6; }
   }
-  finishTurn(civ) { const { x, z } = civ; this.remove(civ, this.civs); AudioFX.turn(); this.spawnZombie(x, z); }
+  finishTurn(civ) {
+    const { x, z } = civ;
+    const wasAnimal = civ.animal;
+    this.remove(civ, this.civs);
+    AudioFX.turn();
+    const z2 = this.spawnZombie(x, z);
+    if (wasAnimal) {
+      // infected livestock: swap in the beast mesh, and it's faster than you
+      this.scene.remove(z2.mesh);
+      z2.mesh = makeAnimal(true);
+      z2.mesh.position.set(x, 0, z);
+      this.scene.add(z2.mesh);
+      z2.animal = true;
+      z2.speed = 4.4 + Math.random() * 0.8;
+      z2.hp = 4;
+    }
+    return z2;
+  }
 
   bite(cop, dmg) {
     if (this.over || this.time < cop.lastBite + 0.48) return;
@@ -663,7 +703,47 @@ export class Game {
     if (this.time < c.stunUntil) { c.vx = c.vz = 0; return; }
     let threat = this.nearest(this.zombies, c.x, c.z, 6);
     if (!threat && this.dist(this.player, c) < 6) threat = this.player;
-    const spd = 2.4 + 1.9 * (c.stamina / 100);
+    const spd = (2.4 + 1.9 * (c.stamina / 100)) * (c.animal ? 0.75 : 1);
+
+    // --- Hollowbrook: armed farmers hold ground and swing ---
+    if (c.armed && threat && !c.animal) {
+      const d = this.dist(threat, c);
+      const a = Math.atan2(threat.x - c.x, threat.z - c.z);
+      c.mesh.rotation.y = a;
+      if (d < 2.0) {
+        c.vx = c.vz = 0;
+        if (this.time > c.nextSwing) {
+          c.nextSwing = this.time + 1.1;
+          this.parts.burst(c.x + Math.sin(a) * 1.2, 1.1, c.z + Math.cos(a) * 1.2, 0xb9bcc0, 5);
+          AudioFX.hit();
+          if (threat === this.player && this.time > this.invulnUntil && this.time >= this.hulkUntil) {
+            this.hurtPlayer(1);                // the transformed form shrugs it off
+          } else if (threat !== this.player) {
+            threat.hp -= 1;
+            if (threat.hp <= 0) { this.remove(threat, this.zombies); AudioFX.zdie(); }
+          }
+        }
+      } else if (d < 9) {                       // charge
+        c.vx = Math.sin(a) * spd * 0.9; c.vz = Math.cos(a) * spd * 0.9;
+      }
+      c.state = 'panic'; c.calmAt = this.time + 2.6;
+      return;
+    }
+
+    // --- Neo Halcyon: hover-shoe blink out of danger ---
+    if (c.blink && threat && this.time > c.nextBlink && this.dist(threat, c) < 4.5) {
+      c.nextBlink = this.time + 3.5;
+      const a = Math.atan2(c.x - threat.x, c.z - threat.z);
+      const to = this.city.streetPointNear(c.x + Math.sin(a) * 11, c.z + Math.cos(a) * 11, 0, 4);
+      this.parts.burst(c.x, 1, c.z, 0x00e5ff, 12);
+      c.x = to.x; c.z = to.z;
+      c.mesh.position.set(c.x, 0, c.z);
+      this.parts.burst(c.x, 1, c.z, 0x7c4dff, 12);
+      AudioFX.click();
+      c.state = 'panic'; c.calmAt = this.time + 2.6;
+      return;
+    }
+
     if (threat) {
       c.state = 'panic'; c.calmAt = this.time + 2.6;
       const a = Math.atan2(c.x - threat.x, c.z - threat.z);

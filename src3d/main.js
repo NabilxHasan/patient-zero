@@ -127,7 +127,7 @@ addEventListener('wheel', e => {
 // unfinished, and why the OS cursor sat on top of the game.
 let camYaw = 0, targetYaw = 0;
 let camPitch = 0, targetPitch = 0;          // radians; 0 = level, +up, -down
-const MOUSE_SENS = 0.0022;
+const MOUSE_SENS = 0.0011;
 const PITCH_MIN = -0.55, PITCH_MAX = 1.15;
 let invertY = false;
 let pointerLocked = false;

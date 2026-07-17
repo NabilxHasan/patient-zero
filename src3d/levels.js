@@ -17,6 +17,7 @@ export const LEVELS = [
   {
     name: 'DISTRICT 1 — MAPLEWOOD SUBURBS',
     intro: 'A quiet neighborhood. Nobody is watching. Yet.',
+    theme: 'city',
     cols: 4, rows: 4,
     civs: 40,
     playerHp: 6,
@@ -38,15 +39,19 @@ export const LEVELS = [
     ],
   },
   {
-    name: 'DISTRICT 2 — CRESTFALL DOWNTOWN',
-    intro: 'Dense streets. Fast prey. Faster response.',
+    name: 'DISTRICT 2 — HOLLOWBROOK COUNTY',
+    intro: 'Open fields. They have tools, and they know how to use them.',
+    theme: 'rural',
     cols: 5, rows: 5,
-    civs: 68,
+    civs: 60,
     playerHp: 6,
-    parkChance: 0.12,
-    buildingH: [6, 12],         // downtown towers — capped so they don't block the camera
-    palette: { ground: 0x161a22, fog: 0x0a0f1a, roofs: [0x2a2e3c, 0x2c3438, 0x322c38, 0x262b36] },
-    props: 26, barrels: 12, healthKits: 5, powers: 10, trees: true,
+    parkChance: 0.42,           // fields everywhere
+    buildingH: [3, 5],          // barns and farmhouses
+    palette: { ground: 0x1d2418, fog: 0x0c1410, roofs: [0x7a3228, 0x6b2a22, 0x8a4a34, 0x5c4432] },
+    props: 22, barrels: 10, healthKits: 5, powers: 10, trees: true,
+    animals: 16,                // livestock, infectable
+    civsFightBack: true,        // farmers swing back with pitchforks
+    oldSchool: true,            // vintage responders
     healers: [{ pct: 0.35, count: 1 }],
     // Every district opens quiet — the response is always something you kick off.
     initial: [],
@@ -65,15 +70,18 @@ export const LEVELS = [
     ],
   },
   {
-    name: 'DISTRICT 3 — FORT HALCYON QUARANTINE',
-    intro: "They know you're coming. Make it count.",
+    name: 'DISTRICT 3 — NEO HALCYON',
+    intro: "Chrome and neon. They won't fight — they'll blink away.",
+    theme: 'neon',
     cols: 5, rows: 5,
-    civs: 52,
+    civs: 56,
     playerHp: 7,
     parkChance: 0.08,
-    buildingH: [4, 9],          // squat military compounds
-    palette: { ground: 0x191c18, fog: 0x0d1210, roofs: [0x3a4030, 0x333a2c, 0x2f3628, 0x424835] },
+    buildingH: [6, 11],         // neon towers
+    palette: { ground: 0x0d0f1a, fog: 0x0a0618, roofs: [0x1b1f3a, 0x231a3a, 0x14202e, 0x2a1630] },
     props: 20, barrels: 16, healthKits: 6, powers: 12, trees: false,
+    neon: true,                 // billboards, strips, hover traffic
+    civsBlink: true,            // hover-shoe / short-range teleport escapes
     healers: [{ pct: 0.22, count: 1 }, { pct: 0.55, count: 2 }],
     // The garrison is here, but it still has to notice you first.
     initial: [],

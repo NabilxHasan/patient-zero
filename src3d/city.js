@@ -3,7 +3,10 @@
 // props, parked cars, streetlights, and a quarantine border with watchtowers.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { box, mat, makeTree, makeProp, makeBorderWall, groundGlow, makeCivCar, makeBench } from './models.js';
+import {
+  box, mat, makeTree, makeProp, makeBorderWall, groundGlow, makeCivCar, makeBench,
+  makeBarn, makeSilo, makeHaystack, makeFence, makeBillboard, makeNeonStrip, makeHoverCar,
+} from './models.js';
 import { BLOCK, STREET, CELL } from './levels.js';
 
 // The city never moves, so its meshes are baked into one merged mesh per
@@ -154,7 +157,7 @@ export function buildCity(scene, cfg) {
       if (Math.random() < cfg.parkChance) park(stat, group, bx, bz, cfg, trees, waters, blockers);
       else building(stat, bx, bz, blockers, cfg);
 
-      if (Math.random() < 0.5) car(stat, bx, bz, blockers);
+      if (Math.random() < 0.5) car(stat, bx, bz, blockers, cfg);
     }
   }
 
@@ -292,11 +295,63 @@ function building(stat, cx, cz, blockers, cfg) {
   const h = hMin + Math.random() * (hMax - hMin);
   const roofs = cfg.palette.roofs;
   const color = roofs[(Math.random() * roofs.length) | 0];
+  const theme = cfg.theme || 'city';
+
+  // ---- rural: barns, farmhouses and silos instead of a facade grid ----
+  if (theme === 'rural') {
+    const barn = makeBarn(w, h, d, color);
+    barn.position.set(cx, 0, cz);
+    stat.add(barn);
+    if (Math.random() < 0.45) {
+      const sh = 5 + Math.random() * 3;
+      const silo = makeSilo(sh);
+      const sx = cx + (w / 2 + 2.2) * (Math.random() < 0.5 ? -1 : 1);
+      silo.position.set(sx, 0, cz + (Math.random() - 0.5) * 3);
+      stat.add(silo);
+      blockers.push({ x: silo.position.x, z: silo.position.z, hw: 1.6, hh: 1.6, top: sh + 1.2, walkable: true });
+    }
+    for (let i = 0; i < 2; i++) {                       // hay bales you can vault
+      const hx = cx + (Math.random() - 0.5) * (BLOCK + 3);
+      const hz = cz + (d / 2 + 1.6 + Math.random() * 1.5) * (Math.random() < 0.5 ? -1 : 1);
+      const hay = makeHaystack(); hay.position.set(hx, 0, hz); stat.add(hay);
+      blockers.push({ x: hx, z: hz, hw: 0.75, hh: 0.75, top: 1.35, walkable: true });
+    }
+    blockers.push({ x: cx, z: cz, hw: w / 2, hh: d / 2, top: h + 0.9, walkable: true });
+    return;
+  }
 
   const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), facadeMaterial(w, h, color));
   b.position.set(cx, h / 2, cz);
   b.castShadow = true; b.receiveShadow = true;
   stat.add(b);
+
+  // ---- neon: light strips, holo billboards ----
+  if (theme === 'neon') {
+    const hues = [0xff2fb9, 0x00e5ff, 0x7c4dff, 0x00ffc8, 0xff5c00];
+    const hue = hues[(Math.random() * hues.length) | 0];
+    for (let i = 1; i < Math.floor(h / 2.4); i++) {     // horizontal bands
+      const y = i * 2.4;
+      for (const [ox, oz, hor, len] of [[0, d / 2 + 0.08, true, w], [0, -d / 2 - 0.08, true, w],
+                                        [w / 2 + 0.08, 0, false, d], [-w / 2 - 0.08, 0, false, d]]) {
+        const strip = makeNeonStrip(len, hor, hue);
+        strip.position.set(cx + ox, y, cz + oz);
+        stat.add(strip);
+      }
+    }
+    // corner uplights
+    for (const [ox, oz] of [[-w / 2, -d / 2], [w / 2, -d / 2], [-w / 2, d / 2], [w / 2, d / 2]]) {
+      const col = makeNeonStrip(h, false, hue);
+      col.rotation.x = Math.PI / 2;
+      col.position.set(cx + ox, h / 2, cz + oz);
+      stat.add(col);
+    }
+    if (Math.random() < 0.6) {                          // rooftop billboard
+      const bb = makeBillboard((Math.random() * 4) | 0);
+      bb.position.set(cx, h + 0.2, cz + (Math.random() - 0.5) * (d - 4));
+      bb.rotation.y = Math.random() * Math.PI * 2;
+      stat.add(bb);
+    }
+  }
 
   // ---- rooftop: walkable in Hulk form, so dress it ----
   const roof = box(w + 0.1, 0.2, d + 0.1, color, { cast: false }); roof.position.set(cx, h + 0.1, cz); stat.add(roof);
@@ -345,6 +400,27 @@ function building(stat, cx, cz, blockers, cfg) {
 }
 
 function park(stat, group, cx, cz, cfg, trees, waters, blockers) {
+  const rural = cfg.theme === 'rural';
+  if (rural) {
+    // ploughed field with a rail fence around it
+    const field = new THREE.Mesh(new THREE.PlaneGeometry(BLOCK, BLOCK), mat(0x2f3a1c, 0x000000, 1, 1));
+    field.rotation.x = -Math.PI / 2; field.position.set(cx, 0.02, cz); field.receiveShadow = true; stat.add(field);
+    for (let r = 0; r < 7; r++) {                      // furrows
+      const row = new THREE.Mesh(new THREE.PlaneGeometry(BLOCK - 1, 0.5), mat(0x3d4a26, 0x000000, 1, 1));
+      row.rotation.x = -Math.PI / 2;
+      row.position.set(cx, 0.03, cz - BLOCK / 2 + 1 + r * 1.5); stat.add(row);
+    }
+    for (const [ox, oz, hor] of [[0, -BLOCK / 2, true], [0, BLOCK / 2, true], [-BLOCK / 2, 0, false], [BLOCK / 2, 0, false]]) {
+      const f = makeFence(BLOCK, hor); f.position.set(cx + ox, 0, cz + oz); stat.add(f);
+      blockers.push({ x: cx + ox, z: cz + oz, hw: hor ? BLOCK / 2 : 0.16, hh: hor ? 0.16 : BLOCK / 2, top: 1.1, walkable: false });
+    }
+    if (cfg.trees !== false) for (let i = 0; i < 3; i++) {
+      const tx = cx + (Math.random() - 0.5) * (BLOCK - 3), tz = cz + (Math.random() - 0.5) * (BLOCK - 3);
+      const t = makeTree(); t.position.set(tx, 0, tz); group.add(t);
+      trees.push({ mesh: t, x: tx, z: tz, broken: false });
+    }
+    return;
+  }
   const grass = new THREE.Mesh(new THREE.PlaneGeometry(BLOCK, BLOCK), mat(0x1d3322, 0x000000, 1, 1));
   grass.rotation.x = -Math.PI / 2; grass.position.set(cx, 0.02, cz); grass.receiveShadow = true; stat.add(grass);
 
@@ -382,14 +458,17 @@ function park(stat, group, cx, cz, cfg, trees, waters, blockers) {
   }
 }
 
-function car(stat, cx, cz, blockers) {
+function car(stat, cx, cz, blockers, cfg) {
   const horiz = Math.random() < 0.5;
   const along = (Math.random() - 0.5) * (BLOCK - 3);
   const side = (Math.random() < 0.5 ? 1 : -1) * (BLOCK / 2 + 1.6);
   const x = cx + (horiz ? along : side);
   const z = cz + (horiz ? side : along);
-  const color = CAR_COLORS[(Math.random() * CAR_COLORS.length) | 0];
-  const g = makeCivCar(color);
+  const neon = cfg && cfg.theme === 'neon';
+  const color = neon
+    ? [0x2a1630, 0x14202e, 0x231a3a, 0x1b1f3a][(Math.random() * 4) | 0]
+    : CAR_COLORS[(Math.random() * CAR_COLORS.length) | 0];
+  const g = neon ? makeHoverCar(color) : makeCivCar(color);
   g.position.set(x, 0, z);
   g.rotation.y = horiz ? Math.PI / 2 : 0;   // park along the kerb
   stat.add(g);
